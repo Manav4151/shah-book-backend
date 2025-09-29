@@ -1,5 +1,6 @@
 import express from "express";
 import cors from "cors";
+import path from "path";
 import router from "./routes/book.routes.js";
 import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";
@@ -32,9 +33,14 @@ connectDB();
 // Mount better-auth handler
 app.use("/api/auth", toNodeHandler(auth));
 
+// --- Static Files ---
+// Serve static files from public directory
+app.use('/public', express.static(path.join(process.cwd(), 'public')));
+
 // --- API Routes ---
 // Use the book routes for any request to /api/books
 app.use('/api/books', router);
+
 
 // Debug middleware to log all requests
 app.use((req, res, next) => {

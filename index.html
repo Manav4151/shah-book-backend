@@ -1,0 +1,216 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Email Client</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        /* Simple scrollbar styling */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #f1f1f1; }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        #email-body iframe { width: 100%; height: 100%; border: none; }
+        .email-item.active { background-color: #dbeafe; } /* blue-100 */
+    </style>
+</head>
+<body class="bg-gray-100 font-sans antialiased text-gray-800">
+
+    <div class="flex h-screen overflow-hidden">
+        <!-- Sidebar: Email List -->
+        <aside class="w-1/3 xl:w-1/4 bg-white border-r border-gray-200 flex flex-col">
+            <div class="p-4 border-b flex justify-between items-center">
+                <h1 class="text-xl font-bold text-gray-700">Inbox</h1>
+                <button id="compose-btn" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition duration-200">Compose</button>
+            </div>
+            <div id="email-list" class="flex-grow overflow-y-auto">
+                <!-- Email items will be injected here by JavaScript -->
+                <div class="p-8 text-center text-gray-500">Loading emails...</div>
+            </div>
+        </aside>
+
+        <!-- Main Content: Email View -->
+        <main class="flex-grow flex flex-col bg-gray-50">
+            <div id="email-view" class="flex-grow overflow-y-auto p-6">
+                <div class="h-full flex items-center justify-center text-gray-500">
+                    <p>Select an email to read</p>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Compose Email Modal -->
+    <div id="compose-modal" class="fixed inset-0 bg-black bg-opacity-50 hidden flex items-center justify-center z-50">
+        <div class="bg-white rounded-lg shadow-xl w-full max-w-2xl m-4">
+            <form id="compose-form">
+                <div class="p-4 bg-gray-100 border-b rounded-t-lg">
+                    <h2 class="text-lg font-semibold">New Message</h2>
+                </div>
+                <div class="p-6 space-y-4">
+                    <div>
+                        <label for="compose-to" class="block text-sm font-medium text-gray-700">To:</label>
+                        <input type="email" id="compose-to" name="to" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="compose-subject" class="block text-sm font-medium text-gray-700">Subject:</label>
+                        <input type="text" id="compose-subject" name="subject" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500">
+                    </div>
+                    <div>
+                        <label for="compose-text" class="block text-sm font-medium text-gray-700">Body:</label>
+                        <textarea id="compose-text" name="text" rows="8" required class="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"></textarea>
+                    </div>
+                    <div>
+                        <label for="compose-attachment" class="block text-sm font-medium text-gray-700">Attachment:</label>
+                        <input type="file" id="compose-attachment" name="attachment" class="mt-1 block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                    </div>
+                </div>
+                <div class="px-6 py-3 bg-gray-50 border-t flex justify-end items-center space-x-3 rounded-b-lg">
+                    <span id="status-message" class="text-sm text-gray-600"></span>
+                    <button type="button" id="close-modal-btn" class="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300">Cancel</button>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50" id="send-btn">Send</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const emailListEl = document.getElementById('email-list');
+            const emailViewEl = document.getElementById('email-view');
+            
+            // Modal elements
+            const composeBtn = document.getElementById('compose-btn');
+            const composeModal = document.getElementById('compose-modal');
+            const closeModalBtn = document.getElementById('close-modal-btn');
+            const composeForm = document.getElementById('compose-form');
+            const sendBtn = document.getElementById('send-btn');
+            const statusMessageEl = document.getElementById('status-message');
+
+
+            // --- Fetch and Display Email List ---
+            const fetchEmails = async () => {
+                try {
+                    const response = await fetch('http://localhost:5001/api/emails');
+                    console.log(response);
+                    if (!response.ok) throw new Error('Failed to fetch emails');
+                    const emails = await response.json();
+
+                    emailListEl.innerHTML = emails.map(email => `
+                        <div class="email-item p-4 border-b cursor-pointer hover:bg-gray-100 transition duration-200" data-uid="${email.uid}">
+                            <div class="font-semibold truncate">${email.from}</div>
+                            <div class="text-sm text-gray-800 truncate">${email.subject}</div>
+                            <div class="text-xs text-gray-500 mt-1">${new Date(email.date).toLocaleString()}</div>
+                        </div>
+                    `).join('');
+                } catch (error) {
+                    emailListEl.innerHTML = `<div class="p-4 text-red-500">${error.message}. Is the server running?</div>`;
+                    console.error(error);
+                }
+            };
+
+            // --- Fetch and Display a Single Email ---
+            const viewEmail = async (uid) => {
+                // Set loading state
+                emailViewEl.innerHTML = `<div class="h-full flex items-center justify-center text-gray-500"><p>Loading email...</p></div>`;
+                
+                // Highlight active email
+                 document.querySelectorAll('.email-item').forEach(item => item.classList.remove('active'));
+                 document.querySelector(`.email-item[data-uid='${uid}']`).classList.add('active');
+
+                try {
+                    const response = await fetch(`http://localhost:5001/api/emails/${uid}`);
+                    if (!response.ok) throw new Error('Failed to load email');
+                    const email = await response.json();
+
+                    const attachmentsHtml = email.attachments.length > 0 ? `
+                        <div class="mt-4 pt-4 border-t">
+                            <h4 class="font-semibold mb-2">Attachments (${email.attachments.length})</h4>
+                            <ul class="space-y-1">
+                                ${email.attachments.map(att => `
+                                    <li class="text-sm text-blue-600">${att.filename} (${(att.size / 1024).toFixed(2)} KB)</li>
+                                `).join('')}
+                            </ul>
+                        </div>
+                    ` : '';
+
+                    emailViewEl.innerHTML = `
+                        <div class="p-4 sm:p-6">
+                            <h2 class="text-2xl font-bold mb-1">${email.subject}</h2>
+                            <div class="text-sm text-gray-600">
+                                <strong>From:</strong> ${email.from} <br>
+                                <strong>To:</strong> ${email.to} <br>
+                                <strong>Date:</strong> ${new Date(email.date).toLocaleString()}
+                            </div>
+                            ${attachmentsHtml}
+                        </div>
+                        <div id="email-body" class="flex-grow bg-white border-t">
+                            <iframe></iframe>
+                        </div>
+                    `;
+                    // Use an iframe to sandbox the HTML content for security
+                    const iframe = emailViewEl.querySelector('iframe');
+                    iframe.srcdoc = email.html;
+
+                } catch (error) {
+                    emailViewEl.innerHTML = `<div class="p-4 text-red-500">${error.message}</div>`;
+                    console.error(error);
+                }
+            };
+
+            // --- Event Listeners ---
+            emailListEl.addEventListener('click', (e) => {
+                const item = e.target.closest('.email-item');
+                if (item) {
+                    const uid = item.dataset.uid;
+                    viewEmail(uid);
+                }
+            });
+
+            // Modal handling
+            composeBtn.addEventListener('click', () => composeModal.classList.remove('hidden'));
+            closeModalBtn.addEventListener('click', () => composeModal.classList.add('hidden'));
+
+            // Handle sending email
+            composeForm.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                sendBtn.disabled = true;
+                statusMessageEl.textContent = 'Sending...';
+
+                const formData = new FormData(composeForm);
+
+                try {
+                    const response = await fetch('http://localhost:5001/api/send', {
+                        method: 'POST',
+                        body: formData,
+                    });
+
+                    const resultText = await response.text();
+                    
+                    if (!response.ok) {
+                        throw new Error(resultText || 'Failed to send email.');
+                    }
+                    
+                    statusMessageEl.textContent = 'Sent successfully!';
+                    statusMessageEl.classList.remove('text-red-500');
+                    setTimeout(() => {
+                        composeModal.classList.add('hidden');
+                        composeForm.reset();
+                        statusMessageEl.textContent = '';
+                    }, 2000);
+
+                } catch (error) {
+                    statusMessageEl.textContent = `Error: ${error.message}`;
+                    statusMessageEl.classList.add('text-red-500');
+                } finally {
+                    sendBtn.disabled = false;
+                }
+            });
+
+            // --- Initial Load ---
+            fetchEmails();
+        });
+    </script>
+</body>
+</html>

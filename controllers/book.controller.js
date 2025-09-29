@@ -832,7 +832,21 @@ export const bulkImportExcelFile = async (req, res) => {
 
     const { mapping, options } = req.body;
     
-    if (!mapping || typeof mapping !== 'object') {
+    // Parse mapping if it's a string
+    let parsedMapping = mapping;
+    if (typeof mapping === 'string') {
+      try {
+        parsedMapping = JSON.parse(mapping);
+      } catch (parseError) {
+        logger.warn('Could not parse mapping JSON:', parseError);
+        return res.status(400).json({
+          success: false,
+          message: 'Invalid mapping format'
+        });
+      }
+    }
+    
+    if (!parsedMapping || typeof parsedMapping !== 'object') {
       return res.status(400).json({
         success: false,
         message: 'Column mapping is required'
@@ -845,7 +859,7 @@ export const bulkImportExcelFile = async (req, res) => {
     logger.info('Starting bulk Excel import', { 
       fileName: req.file.originalname, 
       filePath,
-      mapping,
+      mapping: parsedMapping,
       options 
     });
 
@@ -859,7 +873,7 @@ export const bulkImportExcelFile = async (req, res) => {
       }
     }
 
-    const importResult = await bulkImportExcel(filePath, mapping, originalName, importOptions);
+    const importResult = await bulkImportExcel(filePath, parsedMapping, originalName, importOptions);
 
     if (!importResult.success) {
       return res.status(500).json({
@@ -884,7 +898,8 @@ export const bulkImportExcelFile = async (req, res) => {
         fileName: req.file.originalname,
         stats: importResult.stats,
         summary: importResult.summary,
-        logFile: importResult.logFile
+        logFile: importResult.logFile,
+        logFileUrl: importResult.logFileUrl
       }
     });
 

@@ -299,8 +299,10 @@ async function findExistingBookWithConflicts(bookData) {
 
     // 3) Check by Title + Author
     if (!existingBook) {
+        // Escape special regex characters in title
+        const escapedTitle = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         existingBook = await Book.findOne({
-            title: new RegExp(`^${title}$`, "i")
+            title: new RegExp(`^${escapedTitle}$`, "i")
         });
 
         if (existingBook) {
@@ -446,6 +448,7 @@ function createLogFile(logFileName, conflicts, duplicates, errors) {
  * @returns {Object} - Import results with detailed statistics
  */
 export async function bulkImportExcel(filePath, mapping, originalNameWithoutExt, options = {}) {
+    // Simplified: Only insert new books, ignore duplicates and conflicts
     const { skipDuplicates = true, skipConflicts = true, updateExisting = false } = options;
     
     try {
@@ -498,86 +501,57 @@ export async function bulkImportExcel(filePath, mapping, originalNameWithoutExt,
                 const { existingBook, conflictType, conflictFields } = await findExistingBookWithConflicts(bookData);
 
                 if (existingBook) {
-                    // Check for pricing conflicts
-                    const { existingPricing, pricingConflictType, differences } = await findExistingPricing(existingBook._id, pricingData);
-
-                    if (conflictType === 'DUPLICATE' && pricingConflictType === 'DUPLICATE') {
-                        // Complete duplicate
+                    // Check if we have pricing data and if it's from a different source
+                    if (pricingData.source && pricingData.rate) {
+                        const { existingPricing } = await findExistingPricing(existingBook._id, pricingData);
+                        
+                        if (!existingPricing) {
+                            // Book exists but pricing from this source doesn't - add new pricing
+                            const newPricing = new BookPricing({ ...pricingData, book: existingBook._id });
+                            await newPricing.save();
+                            
+                            stats.inserted++; // Count as inserted since we added pricing data
+                            logger.info(`Added new pricing for existing book: ${bookData.title} (source: ${pricingData.source})`);
+                        } else {
+                            // Both book and pricing exist - skip as duplicate
+                            stats.duplicates++;
+                            duplicates.push({
+                                row: i + 1,
+                                conflictType: 'DUPLICATE',
+                                bookData,
+                                pricingData,
+                                existingBook,
+                                existingPricing,
+                                reason: 'Book and pricing already exist'
+                            });
+                            stats.duplicateDetails.push({
+                                row: i + 1,
+                                book: bookData.title,
+                                isbn: bookData.isbn,
+                                existingBookId: existingBook._id,
+                                reason: 'Complete duplicate (book + pricing)'
+                            });
+                            logger.info(`Skipped duplicate: ${bookData.title} (book and pricing exist)`);
+                        }
+                    } else {
+                        // Book exists but no pricing data - skip
                         stats.duplicates++;
                         duplicates.push({
                             row: i + 1,
-                            conflictType,
+                            conflictType: conflictType === 'DUPLICATE' ? 'DUPLICATE' : 'CONFLICT',
                             bookData,
                             pricingData,
                             existingBook,
-                            existingPricing,
-                            pricingConflictType
+                            conflictFields
                         });
                         stats.duplicateDetails.push({
                             row: i + 1,
                             book: bookData.title,
                             isbn: bookData.isbn,
-                            existingBookId: existingBook._id
+                            existingBookId: existingBook._id,
+                            reason: conflictType === 'DUPLICATE' ? 'Duplicate book' : 'Book conflict'
                         });
-                    } else if (conflictType === 'DUPLICATE' && pricingConflictType === 'CONFLICT') {
-                        // Book duplicate but pricing conflict
-                        if (updateExisting) {
-                            // Update pricing
-                            await BookPricing.findByIdAndUpdate(existingPricing._id, pricingData);
-                            stats.updated++;
-                            logger.info(`Updated pricing for existing book: ${bookData.title}`);
-                        } else {
-                            stats.conflicts++;
-                            conflicts.push({
-                                row: i + 1,
-                                conflictType: 'PRICING_CONFLICT',
-                                bookData,
-                                pricingData,
-                                existingBook,
-                                existingPricing,
-                                pricingConflicts: differences
-                            });
-                        }
-                    } else if (conflictType.includes('CONFLICT') || conflictType.includes('AUTHOR_CONFLICT')) {
-                        // Book conflicts
-                        if (updateExisting) {
-                            // Update book and pricing
-                            await Book.findByIdAndUpdate(existingBook._id, bookData);
-                            if (existingPricing) {
-                                await BookPricing.findByIdAndUpdate(existingPricing._id, pricingData);
-                            } else {
-                                await new BookPricing({ ...pricingData, book: existingBook._id }).save();
-                            }
-                            stats.updated++;
-                            logger.info(`Updated conflicting book: ${bookData.title}`);
-                        } else {
-                            stats.conflicts++;
-                            conflicts.push({
-                                row: i + 1,
-                                conflictType,
-                                bookData,
-                                pricingData,
-                                existingBook,
-                                conflictFields,
-                                pricingConflicts: differences
-                            });
-                        }
-                    } else {
-                        // Book duplicate, new pricing
-                        if (updateExisting) {
-                            await new BookPricing({ ...pricingData, book: existingBook._id }).save();
-                            stats.updated++;
-                            logger.info(`Added new pricing for existing book: ${bookData.title}`);
-                        } else {
-                            stats.conflicts++;
-                            conflicts.push({
-                                row: i + 1,
-                                conflictType: 'NEW_PRICING_FOR_EXISTING_BOOK',
-                                bookData,
-                                pricingData,
-                                existingBook
-                            });
-                        }
+                        logger.info(`Skipped existing book: ${bookData.title} (${conflictType})`);
                     }
                 } else {
                     // New book - insert both book and pricing
@@ -618,12 +592,13 @@ export async function bulkImportExcel(filePath, mapping, originalNameWithoutExt,
             success: true,
             message: "Bulk import completed successfully",
             stats,
-            logFile: logFilePath,
+            logFile: logFileName,
+            logFileUrl: `http://localhost:8000/api/logs/${encodeURIComponent(logFileName)}/download`,
             summary: {
                 totalProcessed: stats.total,
-                successful: stats.inserted + stats.updated,
-                failed: stats.conflicts + stats.duplicates + stats.errors + stats.skipped,
-                conflicts: stats.conflicts,
+                successful: stats.inserted, // This now includes new books + new pricing for existing books
+                failed: stats.duplicates + stats.errors + stats.skipped,
+                conflicts: 0, // No conflicts in simplified mode
                 duplicates: stats.duplicates,
                 errors: stats.errors,
                 skipped: stats.skipped
@@ -639,3 +614,4 @@ export async function bulkImportExcel(filePath, mapping, originalNameWithoutExt,
         };
     }
 }
+
