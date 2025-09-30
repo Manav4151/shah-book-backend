@@ -2,7 +2,8 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import router from "./routes/book.routes.js";
-import { connectDB } from "./config/db.js";
+import emailRouter from "./routes/email.routes.js";
+ import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";
 import { toNodeHandler } from "better-auth/node";
 import { errorHandler, notFoundHandler } from "./middleware/errorhandler.middleware.js";
@@ -40,6 +41,8 @@ app.use('/public', express.static(path.join(process.cwd(), 'public')));
 // --- API Routes ---
 // Use the book routes for any request to /api/books
 app.use('/api/books', router);
+// Use the email routes for any request to /api/emails
+app.use('/api/emails', emailRouter);
 
 
 // Debug middleware to log all requests
