@@ -5,12 +5,17 @@ import multer from 'multer';
 import { ApiResponse } from '../lib/api-response.js';
 import { AppError } from '../lib/api-error.js';
 import { logger } from '../lib/logger.js';
+import dotenv from 'dotenv';
+dotenv.config();
+
+console.log("Environment Variables:");
+console.log("IMAP Configuration:", process.env.EMAIL_USER, process.env.EMAIL_PASSWORD, process.env.EMAIL_HOST_IMAP, process.env.EMAIL_PORT_IMAP);
 
 // IMAP Configuration for fetching emails
 const imapConfig = {
     imap: {
-        user: "20manavpatel@gmail.com",
-        password: 'thuz hbnp dlix avhl',
+        user: process.env.EMAIL_USER,
+        password: process.env.EMAIL_PASSWORD,
         host: 'imap.gmail.com',
         port: 993,
         tls: true,
@@ -27,8 +32,8 @@ const transporter = createTransport({
     port: 465,
     secure: true,
     auth: {
-        user: "20manavpatel@gmail.com",
-        pass: "thuz hbnp dlix avhl",
+        user: process.env.EMAIL_USER,
+        pass: process.env.EMAIL_PASSWORD,
     },
 });
 
