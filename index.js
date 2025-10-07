@@ -3,6 +3,7 @@ import cors from "cors";
 import path from "path";
 import router from "./routes/book.routes.js";
 import emailRouter from "./routes/email.routes.js";
+import quotationRouter from "./routes/quotation.routes.js";
  import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";
 import { toNodeHandler } from "better-auth/node";
@@ -44,7 +45,8 @@ app.use('/api/books', router);
 // Use the email routes for any request to /api/emails
 app.use('/api/emails', emailRouter);
 
-
+// Use the quotation routes for any request to /api/quotation
+app.use('/api/quotations',quotationRouter )  ; 
 // Debug middleware to log all requests
 app.use((req, res, next) => {
   console.log(`${req.method} ${req.path} - Origin: ${req.headers.origin || 'No origin'}`);
