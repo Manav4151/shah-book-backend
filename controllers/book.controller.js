@@ -7,8 +7,37 @@ import path from 'path';
 import { log } from 'console';
 import { logger } from '../lib/logger.js';
 import { create } from 'domain';
+import Publisher from '../models/publisher.schema.js';
 
 
+/**
+ * A helper function to find an existing publisher by name or create a new one.
+ * This is a critical step for ensuring data integrity.
+ * @param {string} publisherName - The name of the publisher.
+ * @returns {Promise<string>} - The ObjectId of the publisher.
+ */
+const getOrCreatePublisher = async (publisherName) => {
+    if (!publisherName || typeof publisherName !== 'string' || publisherName.trim() === '') {
+        // Handle cases where publisher name is missing or invalid
+        // Depending on requirements, you could throw an error or return null
+        throw new Error('Publisher name is required and must be a non-empty string.');
+    }
+
+    const trimmedName = publisherName.trim();
+    
+    // Find a publisher with a case-insensitive match
+    const existingPublisher = await Publisher.findOne({
+        name: new RegExp(`^${trimmedName}$`, 'i')
+    });
+
+    if (existingPublisher) {
+        return existingPublisher._id;
+    }
+
+    // If no publisher is found, create a new one
+    const newPublisher = await Publisher.create({ name: trimmedName });
+    return newPublisher._id;
+};
 export const checkBookStatus = async (req, res) => {
   try {
     const { bookData, pricingData, action } = req.body;
@@ -17,12 +46,12 @@ export const checkBookStatus = async (req, res) => {
       return res.status(400).json({ message: "bookData and pricingData are required" });
     }
 
-    const { isbn, other_code, title, author } = bookData;
+    const { isbn, other_code, title, author, publisher_name } = bookData;
     const { source } = pricingData;
 
     let existingBook = null;
     let response = {};
-
+     const publisherId = await getOrCreatePublisher(publisher_name);
     // 🔹 1) If ISBN present → check by ISBN
     if (isbn) {
       existingBook = await Book.findOne({ isbn });
@@ -38,14 +67,14 @@ export const checkBookStatus = async (req, res) => {
           if (sameYear && samePublisher) {
             response = {
               status: "DUPLICATE",
-              message: "Book already exists with same ISBN, title, and author.",
+              message: "This book already exists in the system.",
               existingBook,
             };
           } else {
             response = {
               status: "DUPLICATE",
               message:
-                "Book already exists with same ISBN, title, and author. But year OR publisher name different",
+                "This book already exists in the system. but some details (e.g., year or publisher) differ",
               existingBook,
               conflictFields: {
                 year: { old: existingBook.year, new: bookData.year },
@@ -59,7 +88,7 @@ export const checkBookStatus = async (req, res) => {
         } else if (sameTitle && !sameAuthor) {
           response = {
             status: "AUTHOR_CONFLICT",
-            message: "Same ISBN & Title found but Author is different.",
+            message: "Conflict detected: A book with this ISBN and title already exists but has different details. Please verify.",
             existingBook,
             newData: bookData,
             conflictFields: {
@@ -70,7 +99,7 @@ export const checkBookStatus = async (req, res) => {
         } else {
           response = {
             status: "CONFLICT",
-            message: "Same ISBN found but Title/Author differ.",
+            message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
             existingBook,
             newData: bookData,
             conflictFields: {
@@ -103,14 +132,14 @@ export const checkBookStatus = async (req, res) => {
             if (sameYear && samePublisher) {
               response = {
                 status: "DUPLICATE",
-                message: "Book already exists with same other_code, title, and author.",
+                message: "This book already exists in the system.",
                 existingBook,
               };
             } else {
               response = {
                 status: "DUPLICATE",
                 message:
-                  "Book already exists with same other_code, title, and author. But year OR publisher name different",
+                  "This book already exists in the system. but some details (e.g., year or publisher) differ",
                 existingBook,
                 conflictFields: {
                   year: { old: existingBook.year, new: bookData.year },
@@ -125,7 +154,7 @@ export const checkBookStatus = async (req, res) => {
           } else {
             response = {
               status: "CONFLICT",
-              message: "Same other_code found but Title/Author differ.",
+              message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
               existingBook,
               newData: bookData,
               conflictFields: {
@@ -155,7 +184,7 @@ export const checkBookStatus = async (req, res) => {
           if (sameYear && samePublisher) {
             response = {
               status: "DUPLICATE",
-              message: "Book already exists with same Title and Author. But ISBN/other_code different or not provided.",
+              message: "This book already exists in the system.",
               existingBook,
               isbn: { old: existingBook.isbn, new: bookData.isbn },
               other_code: { old: existingBook.other_code, new: bookData.other_code },
@@ -164,7 +193,7 @@ export const checkBookStatus = async (req, res) => {
             response = {
               status: "DUPLICATE",
               message:
-                "Book already exists with same Title and Author. No ISBN/other_code provided. But year OR publisher name different",
+                "This book already exists in the system.but some details (e.g., year or publisher) differ",
               existingBook,
               conflictFields: {
                 isbn: { old: existingBook.isbn, new: bookData.isbn },
@@ -180,7 +209,7 @@ export const checkBookStatus = async (req, res) => {
         } else {
           response = {
             status: "AUTHOR_CONFLICT",
-            message: "Same Title found but Author is different.",
+            message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
             existingBook,
             newData: bookData,
             conflictFields: {
