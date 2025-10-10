@@ -6,7 +6,8 @@ dotenv.config();
 
 export async function connectDB() {
     try {
-        const mongoUrl = process.env.MONGODB_URL || "mongodb://127.0.0.1:27017";
+        console.log("MONGODB_ATLAS_URL", process.env.MONGODB_ATLAS_URL);
+        const mongoUrl = process.env.MONGODB_ATLAS_URL || "mongodb://127.0.0.1:27017";
         const dbName = process.env.MONGODB_NAME || "demo";
         await connect(`${mongoUrl}/${dbName}`);
         console.log("✅ MongoDB Connected");

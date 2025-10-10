@@ -3,6 +3,7 @@ import { Schema, model } from 'mongoose';
 const customerSchema = new Schema(
     {
         name: { type: String, required: true, trim: true },
+        phone: { type: String, required: true, unique: true, trim: true },
         contactPerson: { type: String, trim: true },
         contactPersonEmail: { type: String, unique: true,trim: true , lowercase: true,
                 match: [/.+\@.+\..+/, 'Please fill a valid email address'],},

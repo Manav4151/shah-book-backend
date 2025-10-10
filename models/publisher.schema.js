@@ -9,13 +9,14 @@ const publisherSchema = new Schema(
             unique: true,
             index: true,
         },
+        phone: { type: String, required: true, unique: true, trim: true },
             email: {
                 type: String,
                 trim: true,
                 lowercase: true,
                 match: [/.+\@.+\..+/, 'Please fill a valid email address'],
             },
-      
+            
         address: {
             street: {
                 type: String,
