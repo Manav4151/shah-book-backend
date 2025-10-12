@@ -52,7 +52,7 @@ export const checkBookStatus = async (req, res) => {
 
     let existingBook = null;
     let response = {};
-    const publisherId = await getOrCreatePublisher(publisher_name);
+    const publisherId = await Publisher.findOne({ name: publisher_name });
     // 🔹 1) If ISBN present → check by ISBN
     if (isbn) {
       existingBook = await Book.findOne({ isbn });
@@ -306,11 +306,20 @@ export const createOrUpdateBook = async (req, res) => {
   if (!status || !bookData || !pricingData) {
     return res.status(400).json({ message: 'Request must include action, bookData, and pricingData.' });
   }
+  logger.info('Publisher data:', publisherData);
 
   // --- ACTION: CREATE_NEW ---
   if (status === 'NEW') {
     try {
-      
+
+      const existingPublisher = await Publisher.findOne({ name: publisherData.name });
+      if (existingPublisher) {
+        bookData.publisher = existingPublisher._id;
+      } else {
+        const newPublisher = new Publisher(publisherData);
+        const savedPublisher = await newPublisher.save();
+        bookData.publisher = savedPublisher._id;
+      }
       const newBook = new Book(bookData);
       const savedBook = await newBook.save();
 
@@ -373,72 +382,72 @@ export const createOrUpdateBook = async (req, res) => {
 };
 
 // --- GET ALL BOOKS (with Pagination) ---
-// --- GET ALL BOOKS (with Pagination, Filtering, and Pricing) ---
 export const getBooks = async (req, res) => {
-  const page = parseInt(req.query.page) || 1;
-  const limit = parseInt(req.query.limit) || 10;
-  const skip = (page - 1) * limit;
-
-  // Extract filter parameters
-  const { title, author, isbn, year, classification, publisher_name, } = req.query;
-
   try {
-    // Build filter object
-    let filter = {};
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
 
-    if (title) {
-      filter.title = { $regex: title, $options: 'i' };
-    }
-    if (author) {
-      filter.author = { $regex: author, $options: 'i' };
-    }
-    if (isbn) {
-      filter.isbn = { $regex: isbn, $options: 'i' };
-    }
-    if (year) {
-      filter.year = parseInt(year);
-    }
-    if (classification) {
-      filter.classification = classification;
-    }
+    // Extract filter parameters
+    const { title, author, isbn, year, classification, publisher_name } = req.query;
+
+    // Build the filter object
+    const filter = {};
+
+    if (title) filter.title = { $regex: title, $options: 'i' };
+    if (author) filter.author = { $regex: author, $options: 'i' };
+    if (isbn) filter.isbn = { $regex: isbn, $options: 'i' };
+    if (year) filter.year = parseInt(year);
+    if (classification) filter.classification = { $regex: classification, $options: 'i' };
+
+    // **Corrected Publisher Filtering Logic**
+    // 1. If a publisher_name filter is provided...
     if (publisher_name) {
-      filter.publisher_name = { $regex: publisher_name, $options: 'i' };
+      // 2. Find all publishers that match the name (case-insensitive).
+      const matchingPublishers = await Publisher.find(
+        { name: { $regex: publisher_name, $options: 'i' } }
+      ).select('_id'); // We only need their IDs.
+
+      // 3. Get an array of just the IDs.
+      const publisherIds = matchingPublishers.map(p => p._id);
+
+      // 4. Use the $in operator to find books with a publisher in that list.
+      filter.publisher = { $in: publisherIds };
     }
 
-    // Get books with filters
+    // Get total count of books matching the filter
+    const totalBooks = await Book.countDocuments(filter);
+
+    // Find the books with the filter, pagination, and populate the publisher's name
     const books = await Book.find(filter)
+      .populate('publisher', 'name') // <-- **CRUCIAL STEP**: Fetch the publisher's name
       .skip(skip)
       .limit(limit)
       .sort({ createdAt: -1 });
 
-    // Get pricing data for all books
-    const bookIds = books.map(book => book._id);
-    const pricingData = await BookPricing.find({ book: { $in: bookIds } })
-      .select('book rate discount source currency last_updated');
+    // --- The rest of your pricing logic can remain largely the same ---
 
-    // Create a map of book ID to pricing data
-    const pricingMap = {};
+    const bookIds = books.map(book => book._id);
+    const pricingData = await BookPricing.find({ book: { $in: bookIds } });
+
+    const pricingMap = new Map();
     pricingData.forEach(pricing => {
-      if (!pricingMap[pricing.book]) {
-        pricingMap[pricing.book] = [];
+      const bookId = pricing.book.toString();
+      if (!pricingMap.has(bookId)) {
+        pricingMap.set(bookId, []);
       }
-      pricingMap[pricing.book].push(pricing);
+      pricingMap.get(bookId).push(pricing);
     });
 
-    // Add pricing data to books
     const booksWithPricing = books.map(book => {
       const bookObj = book.toObject();
-      bookObj.pricing = pricingMap[book._id] || [];
-      // Add a primary price (first pricing entry) for display
-      bookObj.price = bookObj.pricing.length > 0 ? bookObj.pricing[0].rate : null;
+      const pricing = pricingMap.get(book._id.toString()) || [];
+      bookObj.pricing = pricing;
+      bookObj.price = pricing.length > 0 ? pricing[0].rate : null;
       return bookObj;
     });
 
-    // Get total count with same filters
-    const totalBooks = await Book.countDocuments(filter);
     const totalPages = Math.ceil(totalBooks / limit);
-
-    // Calculate statistics
     const stats = {
       totalBooks,
       currentPage: page,
@@ -456,15 +465,9 @@ export const getBooks = async (req, res) => {
       success: true,
       books: booksWithPricing,
       pagination: stats,
-      filters: {
-        title: title || null,
-        author: author || null,
-        isbn: isbn || null,
-        year: year || null,
-        classification: classification || null,
-        publisher_name: publisher_name || null
-      }
+      filters: req.query // Return the original query params as filters
     });
+
   } catch (error) {
     console.error('Error fetching books:', error);
     res.status(500).json({
@@ -474,6 +477,109 @@ export const getBooks = async (req, res) => {
     });
   }
 };
+// --- GET ALL BOOKS (with Pagination, Filtering, and Pricing) ---
+// export const getBooks = async (req, res) => {
+//   const page = parseInt(req.query.page) || 1;
+//   const limit = parseInt(req.query.limit) || 10;
+//   const skip = (page - 1) * limit;
+
+//   // Extract filter parameters
+//   const { title, author, isbn, year, classification, publisher_name, } = req.query;
+//   const publisher = await Publisher.findOne({ name: publisher_name });
+//   try {
+//     // Build filter object
+//     let filter = {};
+
+//     if (title) {
+//       filter.title = { $regex: title, $options: 'i' };
+//     }
+//     if (author) {
+//       filter.author = { $regex: author, $options: 'i' };
+//     }
+//     if (isbn) {
+//       filter.isbn = { $regex: isbn, $options: 'i' };
+//     }
+//     if (year) {
+//       filter.year = parseInt(year);
+//     }
+//     if (classification) {
+//       filter.classification = classification;
+//     }
+//     if (publisher_name) {
+//       filter.publisher = { $regex: publisher._id, $options: 'i' };
+//     }
+
+//     // Get books with filters
+//     const books = await Book.find(filter)
+//       .skip(skip)
+//       .limit(limit)
+//       .sort({ createdAt: -1 });
+
+//     // Get pricing data for all books
+//     const bookIds = books.map(book => book._id);
+//     const publisherIds = books.map(book => book.publisher);
+
+//     const pricingData = await BookPricing.find({ book: { $in: bookIds } })
+//       .select('book rate discount source currency last_updated');
+
+//     // Create a map of book ID to pricing data
+//     const pricingMap = {};
+//     pricingData.forEach(pricing => {
+//       if (!pricingMap[pricing.book]) {
+//         pricingMap[pricing.book] = [];
+//       }
+//       pricingMap[pricing.book].push(pricing);
+//     });
+
+//     // Add pricing data to books
+//     const booksWithPricing = books.map(book => {
+//       const bookObj = book.toObject();
+//       bookObj.pricing = pricingMap[book._id] || [];
+//       // Add a primary price (first pricing entry) for display
+//       bookObj.price = bookObj.pricing.length > 0 ? bookObj.pricing[0].rate : null;
+//       return bookObj;
+//     });
+
+//     // Get total count with same filters
+//     const totalBooks = await Book.countDocuments(filter);
+//     const totalPages = Math.ceil(totalBooks / limit);
+
+//     // Calculate statistics
+//     const stats = {
+//       totalBooks,
+//       currentPage: page,
+//       totalPages,
+//       hasNextPage: page < totalPages,
+//       hasPrevPage: page > 1,
+//       showing: {
+//         from: skip + 1,
+//         to: Math.min(skip + limit, totalBooks),
+//         total: totalBooks
+//       }
+//     };
+
+//     res.status(200).json({
+//       success: true,
+//       books: booksWithPricing,
+//       pagination: stats,
+//       filters: {
+//         title: title || null,
+//         author: author || null,
+//         isbn: isbn || null,
+//         year: year || null,
+//         classification: classification || null,
+//         publisher_name: publisher_name || null
+//       }
+//     });
+//   } catch (error) {
+//     console.error('Error fetching books:', error);
+//     res.status(500).json({
+//       success: false,
+//       message: 'Server error while fetching books.',
+//       error: error.message
+//     });
+//   }
+// };
 
 // --- GET PRICING FOR A SPECIFIC BOOK ---
 export const getBookPricing = async (req, res) => {
