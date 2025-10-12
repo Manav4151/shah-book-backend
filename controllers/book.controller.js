@@ -17,41 +17,42 @@ import Publisher from '../models/publisher.schema.js';
  * @returns {Promise<string>} - The ObjectId of the publisher.
  */
 const getOrCreatePublisher = async (publisherName) => {
-    if (!publisherName || typeof publisherName !== 'string' || publisherName.trim() === '') {
-        // Handle cases where publisher name is missing or invalid
-        // Depending on requirements, you could throw an error or return null
-        throw new Error('Publisher name is required and must be a non-empty string.');
-    }
+  if (!publisherName || typeof publisherName !== 'string' || publisherName.trim() === '') {
+    // Handle cases where publisher name is missing or invalid
+    // Depending on requirements, you could throw an error or return null
+    throw new Error('Publisher name is required and must be a non-empty string.');
+  }
 
-    const trimmedName = publisherName.trim();
-    
-    // Find a publisher with a case-insensitive match
-    const existingPublisher = await Publisher.findOne({
-        name: new RegExp(`^${trimmedName}$`, 'i')
-    });
+  const trimmedName = publisherName.trim();
 
-    if (existingPublisher) {
-        return existingPublisher._id;
-    }
+  // Find a publisher with a case-insensitive match
+  const existingPublisher = await Publisher.findOne({
+    name: new RegExp(`^${trimmedName}$`, 'i')
+  });
 
-    // If no publisher is found, create a new one
-    const newPublisher = await Publisher.create({ name: trimmedName });
-    return newPublisher._id;
+  if (existingPublisher) {
+    return existingPublisher._id;
+  }
+
+  // If no publisher is found, create a new one
+  const newPublisher = await Publisher.create({ name: trimmedName });
+  return newPublisher._id;
 };
 export const checkBookStatus = async (req, res) => {
   try {
-    const { bookData, pricingData, action } = req.body;
+    const { bookData, pricingData, publisherData } = req.body;
 
     if (!bookData || !pricingData) {
       return res.status(400).json({ message: "bookData and pricingData are required" });
     }
 
-    const { isbn, other_code, title, author, publisher_name } = bookData;
+    const { isbn, other_code, title, author } = bookData;
     const { source } = pricingData;
+    const { publisher_name } = publisherData
 
     let existingBook = null;
     let response = {};
-     const publisherId = await getOrCreatePublisher(publisher_name);
+    const publisherId = await getOrCreatePublisher(publisher_name);
     // 🔹 1) If ISBN present → check by ISBN
     if (isbn) {
       existingBook = await Book.findOne({ isbn });
@@ -62,7 +63,7 @@ export const checkBookStatus = async (req, res) => {
 
         if (sameTitle && sameAuthor) {
           const sameYear = existingBook.year === bookData.year;
-          const samePublisher = existingBook.publisher_name === bookData.publisher_name;
+          const samePublisher = existingBook.publisher === publisherId;
 
           if (sameYear && samePublisher) {
             response = {
@@ -120,14 +121,14 @@ export const checkBookStatus = async (req, res) => {
       // Check by other_code if present
       if (other_code) {
         existingBook = await Book.findOne({ other_code });
-        
+
         if (existingBook) {
           const sameTitle = existingBook.title.toLowerCase() === title.toLowerCase();
           const sameAuthor = existingBook.author.toLowerCase() === author.toLowerCase();
 
           if (sameTitle && sameAuthor) {
             const sameYear = existingBook.year === bookData.year;
-            const samePublisher = existingBook.publisher_name === bookData.publisher_name;
+            const samePublisher = existingBook.publisher === publisherId;
 
             if (sameYear && samePublisher) {
               response = {
@@ -166,7 +167,7 @@ export const checkBookStatus = async (req, res) => {
           }
         }
       }
-      
+
       // If no match by other_code, check by Title + Author
       if (!existingBook) {
         existingBook = await Book.findOne({
@@ -179,7 +180,7 @@ export const checkBookStatus = async (req, res) => {
 
         if (sameAuthor) {
           const sameYear = existingBook.year === bookData.year;
-          const samePublisher = existingBook.publisher_name === bookData.publisher_name;
+          const samePublisher = existingBook.publisher === publisherId;
 
           if (sameYear && samePublisher) {
             response = {
@@ -300,7 +301,7 @@ const handlePricingCheck = async (res, existingBook, pricingData, baseResponse) 
 };
 
 export const createOrUpdateBook = async (req, res) => {
-  const { bookData, pricingData, bookId, pricingId, status, pricingAction } = req.body;
+  const { bookData, pricingData, bookId, pricingId, status, pricingAction, publisherData } = req.body;
 
   if (!status || !bookData || !pricingData) {
     return res.status(400).json({ message: 'Request must include action, bookData, and pricingData.' });
@@ -309,6 +310,7 @@ export const createOrUpdateBook = async (req, res) => {
   // --- ACTION: CREATE_NEW ---
   if (status === 'NEW') {
     try {
+      
       const newBook = new Book(bookData);
       const savedBook = await newBook.save();
 
@@ -690,13 +692,13 @@ export const updateBook = async (req, res) => {
 
     // Update the book
     const updatedBook = await Book.findByIdAndUpdate(
-      bookId, 
-      bookData, 
+      bookId,
+      bookData,
       { new: true, runValidators: true }
     );
 
     let updatedPricing = null;
-    
+
     // If pricing data is provided, update or create pricing
     if (pricingData) {
       const existingPricing = await BookPricing.findOne({
@@ -803,9 +805,9 @@ export const validateExcelFile = async (req, res) => {
     const filePath = req.file.path;
     const originalName = path.basename(req.file.originalname, path.extname(req.file.originalname));
 
-    logger.info('Validating Excel file mapping', { 
-      fileName: req.file.originalname, 
-      filePath 
+    logger.info('Validating Excel file mapping', {
+      fileName: req.file.originalname,
+      filePath
     });
 
     const validationResult = await validateExcelMapping(filePath);
@@ -860,7 +862,7 @@ export const bulkImportExcelFile = async (req, res) => {
     }
 
     const { mapping, options } = req.body;
-    
+
     // Parse mapping if it's a string
     let parsedMapping = mapping;
     if (typeof mapping === 'string') {
@@ -874,7 +876,7 @@ export const bulkImportExcelFile = async (req, res) => {
         });
       }
     }
-    
+
     if (!parsedMapping || typeof parsedMapping !== 'object') {
       return res.status(400).json({
         success: false,
@@ -885,11 +887,11 @@ export const bulkImportExcelFile = async (req, res) => {
     const filePath = req.file.path;
     const originalName = path.basename(req.file.originalname, path.extname(req.file.originalname));
 
-    logger.info('Starting bulk Excel import', { 
-      fileName: req.file.originalname, 
+    logger.info('Starting bulk Excel import', {
+      fileName: req.file.originalname,
       filePath,
       mapping: parsedMapping,
-      options 
+      options
     });
 
     // Parse options if provided as string
@@ -939,5 +941,28 @@ export const bulkImportExcelFile = async (req, res) => {
       message: 'Server error during bulk import',
       error: error.message
     });
+  }
+};
+
+// UPDATED: Book suggestions controller
+export const getBookSuggestions = async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q || q.trim() === '') {
+      return res.json({ success: true, books: [] });
+    }
+    const books = await Book.find(
+      { $text: { $search: q } },
+      { score: { $meta: "textScore" } }
+    )
+      .sort({ score: { $meta: "textScore" } })
+      .populate('publisher', 'name') // <-- Use populate to get publisher name
+      .limit(10)
+      .select("title author year publisher"); // <-- Select the 'publisher' object
+
+    res.json({ success: true, books });
+  } catch (error) {
+    logger.error('Error fetching book suggestions:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
   }
 };

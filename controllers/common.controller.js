@@ -8,13 +8,13 @@ import Customer from '../models/customer.schema.js';
  */
 export const createPublisher = async (req, res) => {
     try {
-        const { name,email,contactPersonEmail,contactPersonPhone, contactPerson , address } = req.body;
+        const { name, email, phone, contactPersonEmail, contactPersonPhone, contactPerson, address } = req.body;
 
         if (!name && !email) {
             return res.status(400).json({ message: 'Publisher name and email is required.' });
         }
 
-        const existingPublisher = await Publisher.findOne({ name: new RegExp(`^${name}$`, 'i') , email: new RegExp(`^${email}$`, 'i') });
+        const existingPublisher = await Publisher.findOne({ name: new RegExp(`^${name}$`, 'i'), email: new RegExp(`^${email}$`, 'i') });
         if (existingPublisher) {
             return res.status(409).json({ message: 'A publisher with this name already exists.' });
         }
@@ -24,7 +24,7 @@ export const createPublisher = async (req, res) => {
                 return res.status(409).json({ message: 'A publisher with this email already exists.' });
             }
         }
-        const newPublisher = new Publisher({ name, contactPersonEmail,contactPersonPhone, contactPerson, address, });
+        const newPublisher = new Publisher({ name, email, phone, contactPersonEmail, contactPersonPhone, contactPerson, address, });
         await newPublisher.save();
 
         return res.status(201).json({
@@ -47,9 +47,9 @@ export const createPublisher = async (req, res) => {
  */
 export const createCustomer = async (req, res) => {
     try {
-        const { name,email, contactPerson,contactPersonEmail,contactPersonPhone, address } = req.body;
+        const { name, email, contactPerson, contactPersonEmail, contactPersonPhone, address } = req.body;
 
-        if (!name && !email  ) {
+        if (!name && !email) {
             return res.status(400).json({ message: 'Customer name or email is required.' });
         }
 
@@ -60,7 +60,7 @@ export const createCustomer = async (req, res) => {
             }
         }
 
-        const newCustomer = new Customer({ name, email, contactPerson,contactPersonEmail,contactPersonPhone, address });
+        const newCustomer = new Customer({ name, email, contactPerson, contactPersonEmail, contactPersonPhone, address });
         await newCustomer.save();
 
         return res.status(201).json({
@@ -73,5 +73,40 @@ export const createCustomer = async (req, res) => {
             return res.status(400).json({ message: error.message });
         }
         return res.status(500).json({ message: 'Internal server error.' });
+    }
+};
+
+
+
+// ... (keep your other controller functions like getBookSuggestions)
+
+/**
+ * @desc    Get publisher suggestions based on a search query.
+ * @route   GET /api/books/publisher-suggestions
+ * @access  Public
+ */
+export const getPublisherSuggestions = async (req, res) => {
+    try {
+        const { q } = req.query;
+
+        // If the query is empty or too short, return an empty array
+        if (!q || q.trim().length < 1) {
+            return res.json({ success: true, publishers: [] });
+        }
+
+        // Perform a fuzzy search on the 'name' field using the text index
+        const publishers = await Publisher.find(
+            { $text: { $search: q } },
+            { score: { $meta: "textScore" } } // Rank results by relevance
+        )
+            .sort({ score: { $meta: "textScore" } })
+            .limit(10) // Limit to the top 10 results
+            .select("name"); // Only return the name field
+
+        res.json({ success: true, publishers });
+
+    } catch (error) {
+        logger.error('Error fetching publisher suggestions:', error);
+        res.status(500).json({ success: false, message: 'Server error while fetching suggestions.' });
     }
 };
