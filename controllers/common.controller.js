@@ -95,16 +95,45 @@ export const getPublisherSuggestions = async (req, res) => {
         }
 
         // Perform a fuzzy search on the 'name' field using the text index
-        const publishers = await Publisher.find(
-            { $text: { $search: q } },
-            { score: { $meta: "textScore" } } // Rank results by relevance
-        )
-            .sort({ score: { $meta: "textScore" } })
-            .limit(10) // Limit to the top 10 results
-            .select("name"); // Only return the name field
+        // const publishers = await Publisher.find(
+        //     { $text: { $search: q } },
+        //     { score: { $meta: "textScore" } } // Rank results by relevance
+        // )
+        //     .sort({ score: { $meta: "textScore" } })
+        //     .limit(10) // Limit to the top 10 results
+        //     .select("name"); // Only return the name field
 
-        res.json({ success: true, publishers });
+       
 
+        const publishers = await Publisher.aggregate([
+            {
+                $search: {
+                    // Make sure this index name matches the one you created in Atlas
+                    index: 'publisher_autocomplete',
+                    autocomplete: {
+                        query: q,
+                        path: 'name', // The field we are searching in
+                        tokenOrder: 'sequential',
+                        fuzzy: {
+                            maxEdits: 1,      // Allow for 1 typo
+                            prefixLength: 2,  // The typo can't be in the first 2 letters
+                        }
+                    }
+                }
+            },
+            {
+                // Limit the results for performance
+                $limit: 10
+            },
+            {
+                // Only return the fields we need
+                $project: {
+                    _id: 0,
+                    name: 1
+                }
+            }
+        ]);
+         res.json({ success: true, publishers });
     } catch (error) {
         logger.error('Error fetching publisher suggestions:', error);
         res.status(500).json({ success: false, message: 'Server error while fetching suggestions.' });
