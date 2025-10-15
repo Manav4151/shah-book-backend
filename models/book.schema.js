@@ -4,7 +4,14 @@ import { Schema, model } from 'mongoose';
 const bookSchema = new Schema(
     {
         title: { type: String, default: null, trim: true },
-        author: { type: String, default: null, trim: true },
+    //    authors: [ 
+            // // This is an array of author for separate authors schema.  
+    //   {
+    //     type: Schema.Types.ObjectId,
+    //     ref: 'Author', // This creates the reference
+    //   },
+    // ],
+        author: { type: String, default: null },
         edition: { type: String, default: null },
         year: { type: Number, default: null },
         publisher: {

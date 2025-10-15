@@ -38,12 +38,67 @@ const getOrCreatePublisher = async (publisherName) => {
   const newPublisher = await Publisher.create({ name: trimmedName });
   return newPublisher._id;
 };
+
+// --- ISBN Helpers ---
+const cleanIsbnInput = (raw) => {
+  if (!raw || typeof raw !== 'string') return '';
+  const upper = raw.toUpperCase();
+  const alnum = upper.replace(/[^0-9X]/g, '');
+  if (alnum.length > 10) {
+    // ISBN-13: digits only
+    return alnum.replace(/[^0-9]/g, '');
+  }
+  // ISBN-10: allow X only at last position
+  if (alnum.includes('X') && alnum.indexOf('X') !== alnum.length - 1) {
+    return alnum.replace(/X/g, '');
+  }
+  return alnum;
+};
+
+const validateIsbn10 = (cleanIsbn) => {
+  if (!cleanIsbn || cleanIsbn.length !== 10) return false;
+  if (!/^\d{9}[\dX]$/.test(cleanIsbn)) return false;
+  let sum = 0;
+  for (let i = 0; i < 9; i++) {
+    sum += parseInt(cleanIsbn[i], 10) * (10 - i);
+  }
+  const checkDigit = cleanIsbn[9] === 'X' ? 10 : parseInt(cleanIsbn[9], 10);
+  sum += checkDigit;
+  return sum % 11 === 0;
+};
+
+const validateIsbn13 = (cleanIsbn) => {
+  if (!cleanIsbn || cleanIsbn.length !== 13 || !/^\d{13}$/.test(cleanIsbn)) return false;
+  let sum = 0;
+  for (let i = 0; i < 12; i++) {
+    const digit = parseInt(cleanIsbn[i], 10);
+    sum += digit * (i % 2 === 0 ? 1 : 3);
+  }
+  const checkDigit = (10 - (sum % 10)) % 10;
+  return checkDigit === parseInt(cleanIsbn[12], 10);
+};
+
+const isValidIsbn = (raw) => {
+  if (!raw || typeof raw !== 'string' || raw.trim() === '') return false;
+  const clean = cleanIsbnInput(raw);
+  if (clean.length === 10) return validateIsbn10(clean);
+  if (clean.length === 13) return validateIsbn13(clean);
+  return false;
+};
 export const checkBookStatus = async (req, res) => {
   try {
     const { bookData, pricingData, publisherData } = req.body;
 
     if (!bookData || !pricingData) {
       return res.status(400).json({ message: "bookData and pricingData are required" });
+    }
+
+    // Normalize ISBN early
+    if (bookData && bookData.isbn) {
+      bookData.isbn = cleanIsbnInput(bookData.isbn);
+      if (bookData.isbn && !isValidIsbn(bookData.isbn)) {
+        return res.status(400).json({ message: 'Invalid ISBN provided.' });
+      }
     }
 
     const { isbn, other_code, title, author } = bookData;
@@ -53,6 +108,7 @@ export const checkBookStatus = async (req, res) => {
     let existingBook = null;
     let response = {};
     const publisherId = await Publisher.findOne({ name: publisher_name });
+    
     // 🔹 1) If ISBN present → check by ISBN
     if (isbn) {
       existingBook = await Book.findOne({ isbn });
@@ -307,6 +363,14 @@ export const createOrUpdateBook = async (req, res) => {
     return res.status(400).json({ message: 'Request must include action, bookData, and pricingData.' });
   }
   logger.info('Publisher data:', publisherData);
+
+  // Normalize and validate ISBN once for all flows
+  if (bookData && typeof bookData.isbn === 'string') {
+    bookData.isbn = cleanIsbnInput(bookData.isbn);
+    if (bookData.isbn && !isValidIsbn(bookData.isbn)) {
+      return res.status(400).json({ message: 'Invalid ISBN provided.' });
+    }
+  }
 
   // --- ACTION: CREATE_NEW ---
   if (status === 'NEW') {

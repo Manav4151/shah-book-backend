@@ -10,6 +10,7 @@ const customerSchema = new Schema(
         contactPersonPhone: { type: String, unique: true,trim: true },
         email: { type: String, required: true, unique: true, trim: true, lowercase: true,
                 match: [/.+\@.+\..+/, 'Please fill a valid email address'], },
+        discount: { type: Number, default: 0 },
         address: {
             street: {
                 type: String,

@@ -47,7 +47,7 @@ export const createPublisher = async (req, res) => {
  */
 export const createCustomer = async (req, res) => {
     try {
-        const { name, email, contactPerson, contactPersonEmail, contactPersonPhone, address } = req.body;
+        const { name, email, phone, discount,contactPerson, contactPersonEmail, contactPersonPhone, address } = req.body;
 
         if (!name && !email) {
             return res.status(400).json({ message: 'Customer name or email is required.' });
@@ -60,7 +60,7 @@ export const createCustomer = async (req, res) => {
             }
         }
 
-        const newCustomer = new Customer({ name, email, contactPerson, contactPersonEmail, contactPersonPhone, address });
+        const newCustomer = new Customer({ name, email , phone, discount, contactPerson, contactPersonEmail, contactPersonPhone, address });
         await newCustomer.save();
 
         return res.status(201).json({
