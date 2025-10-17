@@ -21,6 +21,7 @@ const bookPricingSchema = new Schema({
   currency: { type: String, required: true },
   rate: { type: Number, required: true },
   discount: { type: Number, default: 0 },
+  binding_type: { type: String, default: null },
   source: String,
   last_updated: { type: Date, default: Date.now }
 }, { timestamps: true });

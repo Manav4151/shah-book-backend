@@ -1,8 +1,7 @@
 import Book from '../models/book.schema.js';
 import BookPricing from '../models/BookPricing.js';
 import mongoose from 'mongoose';
-import importExcel from '../utils/excelImport.js';
-import { validateExcelMapping, bulkImportExcel } from '../utils/bulkImport.js';
+import { validateExcelMapping, bulkImportExcel } from '../utils/excelImport.js';
 import path from 'path';
 import { log } from 'console';
 import { logger } from '../lib/logger.js';
@@ -448,6 +447,12 @@ export const createOrUpdateBook = async (req, res) => {
 // --- GET ALL BOOKS (with Pagination) ---
 export const getBooks = async (req, res) => {
   try {
+    logger.info('📚 Books API called', { 
+      page: req.query.page, 
+      limit: req.query.limit, 
+      filters: req.query 
+    });
+    
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
@@ -480,19 +485,26 @@ export const getBooks = async (req, res) => {
     }
 
     // Get total count of books matching the filter
+    logger.info('🔍 Counting books with filter:', filter);
     const totalBooks = await Book.countDocuments(filter);
+    logger.info('📊 Total books found:', totalBooks);
 
     // Find the books with the filter, pagination, and populate the publisher's name
+    logger.info('📖 Fetching books from database...');
     const books = await Book.find(filter)
       .populate('publisher', 'name') // <-- **CRUCIAL STEP**: Fetch the publisher's name
       .skip(skip)
       .limit(limit)
       .sort({ createdAt: -1 });
+    
+    logger.info('✅ Books fetched successfully:', books.length, 'books');
 
     // --- The rest of your pricing logic can remain largely the same ---
 
     const bookIds = books.map(book => book._id);
+    logger.info('💰 Fetching pricing data for', bookIds.length, 'books');
     const pricingData = await BookPricing.find({ book: { $in: bookIds } });
+    logger.info('✅ Pricing data fetched:', pricingData.length, 'pricing records');
 
     const pricingMap = new Map();
     pricingData.forEach(pricing => {
@@ -525,6 +537,13 @@ export const getBooks = async (req, res) => {
       }
     };
 
+    logger.info('🎉 Books API response ready:', {
+      booksCount: booksWithPricing.length,
+      totalBooks,
+      page,
+      limit
+    });
+
     res.status(200).json({
       success: true,
       books: booksWithPricing,
@@ -533,11 +552,18 @@ export const getBooks = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Error fetching books:', error);
+    logger.error('❌ Error fetching books:', {
+      error: error.message,
+      stack: error.stack,
+      query: req.query,
+      timestamp: new Date().toISOString()
+    });
+    
     res.status(500).json({
       success: false,
       message: 'Server error while fetching books.',
-      error: error.message
+      error: error.message,
+      timestamp: new Date().toISOString()
     });
   }
 };

@@ -1,0 +1,12 @@
+logs/
+uploads/
+public/
+node_modules/
+extra/
+*.log
+*.json
+*.xlsx
+*.xls
+*.csv
+*.md
+*.txt

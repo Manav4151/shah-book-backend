@@ -3,6 +3,7 @@ const router = Router();
 // import { createBook, getAllBooks, getBookById, updateBook, deleteBook, bulkImportBooks } from '../controllers/book.controller.js';
 import uploadMiddleware from '../middleware/upload.middleware.js';
 import { checkBookStatus, createOrUpdateBook, deleteBook, deleteBookPricing, deleteMultipleBooks, getBookPricing, getBooks, updateBook, validateExcelFile, bulkImportExcelFile, getBookSuggestions } from '../controllers/book.controller.js';
+import { checkDuplicate } from '../controllers/duplicate.controller.js';
 
 // Chained route for getting all books and creating a new book
 // Route for checking if a book exists and what action to take
@@ -35,6 +36,7 @@ router.delete('/bulk', deleteMultipleBooks); // DELETE /api/books/bulk (deletes 
 // Bulk import routes
 router.post('/validate-excel', uploadMiddleware, validateExcelFile); // POST /api/books/validate-excel (validate Excel column mapping)
 router.post('/bulk-import', uploadMiddleware, bulkImportExcelFile); // POST /api/books/bulk-import (bulk import Excel data)
-
+router.post('/check-duplicate', checkDuplicate); // POST /api/books/check-duplicate (check duplicate book)
 router.get('/suggestions', getBookSuggestions);
+
 export default router;

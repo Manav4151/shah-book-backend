@@ -9,7 +9,7 @@ const publisherSchema = new Schema(
             unique: true,
             index: true,
         },
-        phone: { type: String, unique: true, trim: true },
+        phone: { type: String, unique: true, trim: true, sparse: true,},
         email: {
             type: String,
             trim: true,
@@ -41,10 +41,10 @@ const publisherSchema = new Schema(
         },
         contactPerson: { type: String, trim: true },
         contactPersonEmail: {
-            type: String, unique: true, trim: true, lowercase: true,
+            type: String, unique: true, trim: true, lowercase: true,sparse: true,
             match: [/.+\@.+\..+/, 'Please fill a valid email address'],
         },
-        contactPersonPhone: { type: String, unique: true, trim: true },
+        contactPersonPhone: { type: String, unique: true, trim: true ,sparse: true,},
     },
     {
         timestamps: true, // Automatically adds createdAt and updatedAt fields

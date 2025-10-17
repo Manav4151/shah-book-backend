@@ -7,6 +7,37 @@
     "dev": "nodemon index.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
+  "nodemonConfig": {
+    "watch": [
+      "controllers",
+      "models", 
+      "routes",
+      "middleware",
+      "lib",
+      "utils",
+      "index.js",
+      "server.js"
+    ],
+    "ignore": [
+      "logs/**/*",
+      "uploads/**/*",
+      "public/**/*",
+      "node_modules/**/*",
+      "extra/**/*",
+      "*.log",
+      "*.json",
+      "*.xlsx",
+      "*.xls",
+      "*.csv",
+      "*.md"
+    ],
+    "ext": "js",
+    "env": {
+      "NODE_ENV": "development"
+    },
+    "delay": 2000,
+    "verbose": true
+  },
   "type": "module",
   "keywords": [],
   "author": "",

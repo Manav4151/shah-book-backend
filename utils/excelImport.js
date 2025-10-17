@@ -1,228 +1,338 @@
+/**
+ * @file services/importService.js
+ * @description A comprehensive service for a two-step Excel book import process.
+ * 1. Validation & Mapping: Analyzes an Excel file for user review.
+ * 2. Bulk Import: Processes the file using user-approved mappings and robust conflict detection.
+ */
+
+// -----------------------------------------------------------------------------
+// SECTION 1: IMPORTS
+// -----------------------------------------------------------------------------
+import fs from 'fs/promises';
+import path from 'path';
 import xlsx from 'xlsx';
+
+// Mongoose Models
 import Book from '../models/book.schema.js';
-import path from "path";
-// Map Excel headers → Schema fields
-const headerMap = {
+import BookPricing from '../models/BookPricing.js';
+import Publisher from '../models/publisher.schema.js';
+
+// Core business logic (reused from the API controller for consistency)
+import { findBookMatch, checkPricingStatus } from '../controllers/duplicate.controller.js';
+
+// // Utility helpers
+// import { cleanIsbnInput } from '../helpers/isbnHelper.js';
+import { logger } from '../lib/logger.js';
+
+// -----------------------------------------------------------------------------
+// SECTION 2: STEP 1 - VALIDATION & MAPPING
+// (This section is for your "Mapping API")
+// -----------------------------------------------------------------------------
+
+/**
+ * @constant defaultHeaderMap
+ * @description A dictionary to automatically map common Excel headers to database fields.
+ */
+const defaultHeaderMap = {
     "ISBN": "isbn",
     "Non ISBN": "nonisbn",
     "Other Code": "other_code",
     "Title": "title",
     "Author": "author",
     "EDITION": "edition",
+    "Edition": "edition",
     "Year": "year",
-    "Publisher Code": "publisher_id",
     "Publisher": "publisher_name",
-    "Edition": "binding_type",
-    "Sub_Subject": "classification",
-    "Subject": "remarks",
-    "Price": "price",
-    "Curr": "currency"
+    "Binding Type": "binding_type",
+    "Classification": "classification",
+    "Remarks": "remarks",
+    "Price": "rate",
+    "Rate": "rate",
+    "Currency": "currency",
+    "Discount": "discount",
 };
 
 /**
- * Check if a book already exists in the database based on ISBN and title
- * @param {Object} bookData - The book data to check
- * @returns {Object|null} - Existing book or null if not found
+ * Analyzes an Excel file's headers and provides a suggested mapping for user review.
+ * This function should be called first, after the user uploads a file.
+ *
+ * @param {string} filePath - Path to the Excel file.
+ * @returns {Promise<object>} A result object with headers, a suggested mapping, and validation checks.
  */
-async function findExistingBook(bookData) {
+export async function validateExcelMapping(filePath) {
     try {
-        // Treat (source + ISBN/title) as unique. First try ISBN + source
-        if (bookData.isbn && bookData.isbn.trim() !== '' && bookData.source) {
-            const existingByISBNAndSource = await Book.findOne({
-                isbn: bookData.isbn.trim(),
-                source: bookData.source
-            });
-            if (existingByISBNAndSource) {
-                return existingByISBNAndSource;
-            }
-        }
-
-        // Next try title+author+source
-        if (
-            bookData.title && bookData.title.trim() !== '' &&
-            bookData.author && bookData.author.trim() !== '' &&
-            bookData.source
-        ) {
-            const existingByTitleAuthorSource = await Book.findOne({
-                title: { $regex: new RegExp(`^${bookData.title.trim()}$`, 'i') },
-                author: { $regex: new RegExp(`^${bookData.author.trim()}$`, 'i') },
-                source: bookData.source
-            });
-            if (existingByTitleAuthorSource) {
-                return existingByTitleAuthorSource;
-            }
-        }
-
-        // Finally try title+source
-        if (bookData.title && bookData.title.trim() !== '' && bookData.source) {
-            const existingByTitleSource = await Book.findOne({
-                title: { $regex: new RegExp(`^${bookData.title.trim()}$`, 'i') },
-                source: bookData.source
-            });
-            if (existingByTitleSource) {
-                return existingByTitleSource;
-            }
-        }
-
-        return null;
-    } catch (error) {
-        console.error('Error checking for existing book:', error);
-        throw error;
-    }
-}
-
-/**
- * Get the next available book_id
- * @returns {Number} - Next available book_id
- */
-async function getNextBookId() {
-    try {
-        const lastBook = await Book.findOne().sort({ book_id: -1 });
-        return lastBook ? lastBook.book_id + 1 : 1;
-    } catch (error) {
-        console.error('Error getting next book ID:', error);
-        throw error;
-    }
-}
-
-/**
- * Process and clean book data from Excel row
- * @param {Object} row - Raw Excel row data
- * @param {String} sourceName - Original Excel filename without extension
- * @returns {Object} - Cleaned book data
- */
-function processBookData(row, sourceName) {
-    let obj = {};
-
-    // Apply header mapping
-    Object.keys(headerMap).forEach(excelKey => {
-        const schemaKey = headerMap[excelKey];
-        const value = row[excelKey];
-
-        // Clean and validate the value
-        if (value !== undefined && value !== null && value !== '') {
-            // Convert to string and trim whitespace
-            const cleanValue = String(value).trim();
-            if (cleanValue !== '') {
-                obj[schemaKey] = cleanValue;
-            }
-        }
-    });
-
-    // Ensure correct data types
-    if (obj.year) {
-        const yearNum = Number(obj.year);
-        obj.year = !isNaN(yearNum) ? yearNum : null;
-    }
-
-    if (obj.price) {
-        const priceNum = Number(obj.price);
-        obj.price = !isNaN(priceNum) ? priceNum : null;
-    }
-
-    // Always add source = original Excel filename (without extension)
-    obj.source = sourceName;
-
-    return obj;
-}
-
-/**
- * Import Excel data with duplicate checking and upsert logic
- * @param {String} filePath - Path to the Excel file
- * @param {String} originalNameWithoutExt - Original Excel filename without extension
- * @returns {Object} - Import results with statistics
- */
-async function importExcel(filePath, originalNameWithoutExt) {
-    try {
-        console.log("🚀 Starting Excel import...");
-
         const workbook = xlsx.readFile(filePath);
         const sheetName = workbook.SheetNames[0];
-        const sheetData = xlsx.utils.sheet_to_json(workbook.Sheets[sheetName]);
-        console.log(`📊 Found ${sheetData.length} rows in sheet: ${sheetName} | source: ${originalNameWithoutExt}`);
+        const sheet = workbook.Sheets[sheetName];
+        const headers = xlsx.utils.sheet_to_json(sheet, { header: 1 })[0];
 
-        let stats = {
-            total: sheetData.length,
-            inserted: 0,
-            updated: 0,
-            skipped: 0,
-            errors: 0,
-            errorDetails: []
-        };
-
-        for (let i = 0; i < sheetData.length; i++) {
-            const row = sheetData[i];
-
-            try {
-                // Skip empty rows
-                if (!row || Object.keys(row).length === 0) {
-                    stats.skipped++;
-                    continue;
-                }
-
-                // Process the row data
-                const bookData = processBookData(row, originalNameWithoutExt);
-
-                // Skip if no essential data (title or ISBN)
-                if (!bookData.title && !bookData.isbn) {
-                    stats.skipped++;
-                    console.log(`⚠️  Skipping row ${i + 1}: No title or ISBN provided`);
-                    continue;
-                }
-
-                // Check for existing book
-                const existingBook = await findExistingBook(bookData);
-
-                if (existingBook) {
-                    // Update existing record for the same source
-                    const updatedBook = await Book.findByIdAndUpdate(
-                        existingBook._id,
-                        { ...bookData, book_id: existingBook.book_id },
-                        { new: true, runValidators: true }
-                    );
-
-                    stats.updated++;
-                    console.log(`✅ Updated book (source: ${bookData.source}): ${bookData.title || bookData.isbn} (ID: ${existingBook.book_id})`);
-                } else {
-                    // Insert new book
-                    const nextBookId = await getNextBookId();
-                    bookData.book_id = nextBookId;
-
-                    const newBook = new Book(bookData);
-                    await newBook.save();
-
-                    stats.inserted++;
-                    console.log(`➕ Inserted new book (source: ${bookData.source}): ${bookData.title || bookData.isbn} (ID: ${nextBookId})`);
-                }
-
-            } catch (error) {
-                stats.errors++;
-                stats.errorDetails.push({
-                    row: i + 1,
-                    error: error.message,
-                    data: row
-                });
-                console.error(`❌ Error processing row ${i + 1}:`, error.message);
-            }
+        if (!headers || headers.length === 0) {
+            return { success: false, message: "Excel file has no headers or is empty." };
         }
 
-        console.log("✅ Excel import completed!");
-        console.log(`📈 Import Statistics:`, stats);
+        const mapping = {};
+        const unmappedHeaders = [];
+
+        headers.forEach(header => {
+            const cleanHeader = header.trim();
+            if (defaultHeaderMap[cleanHeader]) {
+                mapping[cleanHeader] = defaultHeaderMap[cleanHeader];
+            } else {
+                unmappedHeaders.push(cleanHeader);
+            }
+        });
+
+        const mappedFields = Object.values(mapping);
+        
+        // Define required fields for books and pricing separately
+        const requiredBookFields = ['title', 'author'];
+        const requiredPricingFields = ['rate', 'currency'];
+        
+        // Check which fields are mapped for books and pricing
+        const mappedBookFields = mappedFields.filter(field => 
+            ['title', 'author', 'isbn', 'year', 'edition', 'classification', 'binding_type', 'remarks'].includes(field)
+        );
+        
+        const mappedPricingFields = mappedFields.filter(field => 
+            ['rate', 'currency', 'discount', 'source'].includes(field)
+        );
+
+        // Find missing fields for each category
+        const missingBookFields = requiredBookFields.filter(field => !mappedBookFields.includes(field));
+        const missingPricingFields = requiredPricingFields.filter(field => !mappedPricingFields.includes(field));
 
         return {
             success: true,
-            message: "Excel import completed successfully",
-            stats: stats
+            message: "Validation complete. Please review the suggested mapping.",
+            headers: headers.filter(h => h && h.trim()),
+            mapping, // The automatically generated mapping to show the user
+            unmappedHeaders,
+            validation: {
+                hasRequiredBookFields: missingBookFields.length === 0,
+                hasRequiredPricingFields: missingPricingFields.length === 0,
+                missingBookFields,
+                missingPricingFields,
+                totalRows: headers.length > 0 ? headers.length - 1 : 0, // Exclude header row
+                mappedFields: {
+                    book: mappedBookFields,
+                    pricing: mappedPricingFields
+                }
+            }
         };
 
     } catch (error) {
-        console.error("❌ Error importing Excel file:", error);
-        return {
-            success: false,
-            message: "Error importing Excel file",
-            error: error.message
-        };
+        logger.error('Error validating Excel mapping:', error);
+        return { success: false, message: "Error reading or validating the Excel file.", error: error.message };
     }
 }
 
-export default importExcel;
+// -----------------------------------------------------------------------------
+// SECTION 3: STEP 2 - BULK IMPORT
+// (This section is for your "Import API", which receives the user-approved mapping)
+// -----------------------------------------------------------------------------
+
+// --- Helper Functions for the Import Process ---
+
+/**
+ * Finds a publisher by name or creates it if it doesn't exist.
+ * @param {string} publisherName - The name of the publisher.
+ * @returns {Promise<string|null>} The MongoDB ObjectId of the publisher.
+ */
+async function findOrCreatePublisher(publisherName) {
+    if (!publisherName || !publisherName.trim()) return null;
+    const cleanName = publisherName.trim();
+    let publisher = await Publisher.findOne({ name: cleanName });
+    if (publisher) return publisher._id;
+    const newPublisher = new Publisher({ name: cleanName });
+    await newPublisher.save();
+    return newPublisher._id;
+}
+/**
+ * Processes a single Excel row using a user-approved mapping and transforms it
+ * into a structured object identical to the single-entry API's request body.
+ *
+ * @param {object} row - The raw data from a single Excel row.
+ * @param {object} mapping - The user-confirmed mapping (e.g., { "Book Title": "title", "Pub Name": "publisher_name" }).
+ * @param {string} sourceName - The name for this import batch (e.g., the original filename).
+ * @returns {{bookData: object, pricingData: object, publisherData: object}} - The structured, cleaned, and type-coerced data.
+ */
+function processRowData(row, mapping, sourceName) {
+    // 1. Initialize the final data structure.
+    const data = {
+        bookData: {},
+        pricingData: { source: sourceName }, // Pre-populate with the source name
+        publisherData: {}
+    };
+
+    // 2. Define which database fields belong to which model. This is the sorting key.
+    const pricingFields = ['rate', 'currency', 'discount'];
+    const publisherFields = ['publisher_name'];
+
+    // 3. Iterate through the user-approved mapping to process the row.
+    for (const excelHeader in mapping) {
+        const schemaField = mapping[excelHeader]; // e.g., "title", "rate", "publisher_name"
+        const rawValue = row[excelHeader];
+
+        // 4. Process only if the cell has a value.
+        if (rawValue !== undefined && rawValue !== null) {
+            const cleanValue = String(rawValue).trim();
+            if (cleanValue) { // Ensure the value is not just whitespace
+                // 5. Sort the clean value into the correct object.
+                if (pricingFields.includes(schemaField)) {
+                    data.pricingData[schemaField] = cleanValue;
+                } else if (publisherFields.includes(schemaField)) {
+                    data.publisherData[schemaField] = cleanValue;
+                } else {
+                    data.bookData[schemaField] = cleanValue;
+                }
+            }
+        }
+    }
+
+    // 6. Perform final data cleaning, type coercion, and set default values.
+    if (data.bookData.year) {
+        data.bookData.year = Number(data.bookData.year) || null;
+    }
+    if (data.bookData.isbn) {
+        // Assuming you have this helper available
+        // data.bookData.isbn = cleanIsbnInput(data.bookData.isbn);
+    }
+
+    if (data.pricingData.rate) {
+        data.pricingData.rate = Number(data.pricingData.rate) || null;
+    }
+    data.pricingData.discount = data.pricingData.discount ? Number(data.pricingData.discount) : 0;
+    if (!data.pricingData.currency) {
+        data.pricingData.currency = 'INR'; // Defaulting to INR as per your example
+    }
+    
+    // 7. Return the perfectly structured object, ready for your core logic.
+    return data;
+}
+
+/**
+ * Writes conflict details to a timestamped JSON log file for later review.
+ * @param {Array} conflictDetails - The array of conflict objects.
+ * @param {string} sourceName - The original filename to include in the log's name.
+ * @returns {Promise<string|null>} The path to the created log file.
+ */
+async function writeConflictLog(conflictDetails, sourceName) {
+    try {
+        const logsDir = path.resolve(process.cwd(), 'logs');
+        await fs.mkdir(logsDir, { recursive: true });
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const logFileName = `import-conflicts-${sourceName}-${timestamp}.json`;
+        const logFilePath = path.join(logsDir, logFileName);
+        const logContent = JSON.stringify(conflictDetails, null, 2);
+        await fs.writeFile(logFilePath, logContent);
+        logger.info(`Conflict log created at: ${logFilePath}`);
+        return logFilePath;
+    } catch (error) {
+        logger.error("Failed to write conflict log file.", error);
+        return null;
+    }
+}
+
+/**
+ * The main import function. It takes the user-approved mapping and processes the file.
+ *
+ * @param {string} filePath - Path to the Excel file.
+ * @param {object} mapping - The user-confirmed column mapping from Step 1.
+ * @param {string} sourceName - A name for this import batch, e.g., the original filename.
+ * @returns {Promise<object>} An object with detailed statistics and a path to the conflict log.
+ */
+export async function bulkImportExcel(filePath, mapping, sourceName) {
+    try {
+        logger.info(`Starting bulk import for source: ${sourceName}`);
+        const workbook = xlsx.readFile(filePath);
+        const sheet = workbook.Sheets[workbook.SheetNames[0]];
+        const sheetData = xlsx.utils.sheet_to_json(sheet);
+
+        const stats = {
+            totalRows: sheetData.length,
+            processed: 0,
+            booksAdded: 0,
+            pricesAdded: 0,
+            pricesUpdated: 0,
+            skippedAsDuplicate: 0,
+            skippedAsConflict: 0,
+            errors: 0,
+            conflictDetails: [],
+            errorDetails: [],
+        };
+
+        for (const [index, row] of sheetData.entries()) {
+            const rowNum = index + 2;
+            try {
+                const { bookData, pricingData, publisherData } = processRowData(row, mapping, sourceName);
+                if (!bookData.title || !pricingData.rate) {
+                    throw new Error("Missing required data (Title or Price).");
+                }
+                console.log("publisherdata !!!!!!!!!!!!!!!!!!!" , publisherData);
+                
+                const publisherId = await findOrCreatePublisher(publisherData.publisher_name);
+                const bookMatch = await findBookMatch(bookData, publisherId, publisherData);
+
+                switch (bookMatch.status) {
+                    case 'NEW':
+                        const newBook = new Book({ ...bookData, publisher: publisherId });
+                        await newBook.save();
+                        const newPricing = new BookPricing({ ...pricingData, book: newBook._id });
+                        await newPricing.save();
+                        stats.booksAdded++;
+                        break;
+
+                    case 'DUPLICATE':
+                        const pricingStatus = await checkPricingStatus(bookMatch.book, pricingData);
+                        if (pricingStatus.action === 'ADD_PRICE') {
+                            const newPricingForExisting = new BookPricing({ ...pricingData, book: bookMatch.book._id });
+                            await newPricingForExisting.save();
+                            stats.pricesAdded++;
+                        } else if (pricingStatus.action === 'UPDATE_PRICE') {
+                            await BookPricing.findByIdAndUpdate(pricingStatus.details.pricingId, { rate: pricingData.rate, discount: pricingData.discount });
+                            stats.pricesUpdated++;
+                        } else { // NO_CHANGE
+                            stats.skippedAsDuplicate++;
+                        }
+                        break;
+
+                    case 'CONFLICT':
+                        stats.skippedAsConflict++;
+                        stats.conflictDetails.push({ row: rowNum, data: row, conflict: bookMatch.conflictFields, message: bookMatch.message });
+                        break;
+                }
+                stats.processed++;
+
+            } catch (error) {
+                stats.errors++;
+                stats.errorDetails.push({ row: rowNum, error: error.message, data: row });
+                logger.error(`Error processing row ${rowNum}:`, error);
+            }
+        }
+
+        let conflictLogFile = null;
+        if (stats.skippedAsConflict > 0) {
+            conflictLogFile = await writeConflictLog(stats.conflictDetails, sourceName);
+        }
+
+        logger.info('Bulk import process completed.', { sourceName, stats });
+        return {
+            success: true,
+            message: "Import completed successfully.",
+            stats,
+            logFile: conflictLogFile ? path.basename(conflictLogFile) : null,
+            logFileUrl: conflictLogFile ? `http://localhost:5050/api/logs/${encodeURIComponent(path.basename(conflictLogFile))}/download` : null,
+            conflictLogFile,
+        };
+
+    } catch (error) {
+        logger.error('Fatal error during bulk import:', { sourceName, error });
+        return { success: false, message: "A fatal error occurred during the import.", error: error.message };
+    }
+}
+
+// This bundles all your named exports into a single default object
+export default {
+    validateExcelMapping,
+    bulkImportExcel
+};

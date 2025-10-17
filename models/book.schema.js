@@ -22,7 +22,7 @@ const bookSchema = new Schema(
         isbn: { type: String, default: null, unique: true, sparse: true },
         nonisbn: { type: String, default: null },
         other_code: { type: String, default: null },
-        binding_type: { type: String, default: null },
+        
         classification: { type: String, default: null },
         remarks: { type: String, default: null },
         tags: { type: [String], default: [] },
