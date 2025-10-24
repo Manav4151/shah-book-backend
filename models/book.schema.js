@@ -19,10 +19,10 @@ const bookSchema = new Schema(
             ref: 'Publisher', // This links it to the Publisher model
             required: [true, 'Publisher is required']
         },
-        isbn: { type: String, default: null, unique: true, sparse: true },
-        nonisbn: { type: String, default: null },
+        isbn: { type: String, default: null, sparse: true },
         other_code: { type: String, default: null },
-        
+        imprint: { type: String, default: null },
+        publisher_exclusive: { type: Boolean, default: false },
         classification: { type: String, default: null },
         remarks: { type: String, default: null },
         tags: { type: [String], default: [] },

@@ -18,11 +18,13 @@ import BookPricing from '../models/BookPricing.js';
 import Publisher from '../models/publisher.schema.js';
 
 // Core business logic (reused from the API controller for consistency)
-import { findBookMatch, checkPricingStatus } from '../controllers/duplicate.controller.js';
+// import { findBookMatch, checkPricingStatus } from '../controllers/duplicate.controller.js';
 
 // // Utility helpers
 // import { cleanIsbnInput } from '../helpers/isbnHelper.js';
 import { logger } from '../lib/logger.js';
+import { cleanIsbnForValidation, validateISBN } from './isbnValidator.js';
+import { determineBookStatus } from '../controllers/duplicate.controller.js';
 
 // -----------------------------------------------------------------------------
 // SECTION 2: STEP 1 - VALIDATION & MAPPING
@@ -83,17 +85,17 @@ export async function validateExcelMapping(filePath) {
         });
 
         const mappedFields = Object.values(mapping);
-        
+
         // Define required fields for books and pricing separately
         const requiredBookFields = ['title', 'author'];
         const requiredPricingFields = ['rate', 'currency'];
-        
+
         // Check which fields are mapped for books and pricing
-        const mappedBookFields = mappedFields.filter(field => 
+        const mappedBookFields = mappedFields.filter(field =>
             ['title', 'author', 'isbn', 'year', 'edition', 'classification', 'binding_type', 'remarks'].includes(field)
         );
-        
-        const mappedPricingFields = mappedFields.filter(field => 
+
+        const mappedPricingFields = mappedFields.filter(field =>
             ['rate', 'currency', 'discount', 'source'].includes(field)
         );
 
@@ -138,14 +140,37 @@ export async function validateExcelMapping(filePath) {
  * @param {string} publisherName - The name of the publisher.
  * @returns {Promise<string|null>} The MongoDB ObjectId of the publisher.
  */
-async function findOrCreatePublisher(publisherName) {
-    if (!publisherName || !publisherName.trim()) return null;
-    const cleanName = publisherName.trim();
-    let publisher = await Publisher.findOne({ name: cleanName });
-    if (publisher) return publisher._id;
-    const newPublisher = new Publisher({ name: cleanName });
-    await newPublisher.save();
-    return newPublisher._id;
+// async function findOrCreatePublisher(publisherName) {
+//     if (!publisherName || !publisherName.trim()) return null;
+//     const cleanName = publisherName.trim();
+//     let publisher = await Publisher.findOne({ name: cleanName });
+//     if (publisher) return publisher._id;
+//     const newPublisher = new Publisher({ name: cleanName });
+//     await newPublisher.save();
+//     return newPublisher._id;
+// }
+
+// new logic if not working than uncomment above one and remove below one
+// --- HELPER: Replicates your original findOrCreatePublisher logic in a bulk context ---
+async function findOrCreatePublishers(publisherNames) {
+    const names = [...publisherNames];
+    const existing = await Publisher.find({ name: { $in: names } });
+    const existingNames = new Set(existing.map(p => p.name));
+    const newPublisherDocs = [];
+
+    for (const name of names) {
+        if (!existingNames.has(name)) {
+            newPublisherDocs.push({ name });
+        }
+    }
+
+    if (newPublisherDocs.length > 0) {
+        await Publisher.insertMany(newPublisherDocs);
+    }
+
+    // Return a complete map of all publishers for fast lookups
+    const allPublishers = await Publisher.find({ name: { $in: names } });
+    return new Map(allPublishers.map(p => [p.name, p._id]));
 }
 /**
  * Processes a single Excel row using a user-approved mapping and transforms it
@@ -195,7 +220,7 @@ function processRowData(row, mapping, sourceName) {
     }
     if (data.bookData.isbn) {
         // Assuming you have this helper available
-        // data.bookData.isbn = cleanIsbnInput(data.bookData.isbn);
+        data.bookData.isbn = validateISBN(data.bookData.isbn) ? cleanIsbnForValidation(data.bookData.isbn) : null;
     }
 
     if (data.pricingData.rate) {
@@ -205,7 +230,7 @@ function processRowData(row, mapping, sourceName) {
     if (!data.pricingData.currency) {
         data.pricingData.currency = 'INR'; // Defaulting to INR as per your example
     }
-    
+
     // 7. Return the perfectly structured object, ready for your core logic.
     return data;
 }
@@ -268,39 +293,62 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
                 if (!bookData.title || !pricingData.rate) {
                     throw new Error("Missing required data (Title or Price).");
                 }
-                console.log("publisherdata !!!!!!!!!!!!!!!!!!!" , publisherData);
-                
-                const publisherId = await findOrCreatePublisher(publisherData.publisher_name);
-                const bookMatch = await findBookMatch(bookData, publisherId, publisherData);
+                console.log("publisherdata !!!!!!!!!!!!!!!!!!!", publisherData);
 
-                switch (bookMatch.status) {
+                // 1. Call the new helper instead of the old findBookMatch
+                const statusResult = await determineBookStatus(bookData, pricingData, publisherData);
+                // logger.info('publisherId', publisherId);
+                // --- LOGIC UPDATED BELOW ---
+
+                // 2. Use the result from the helper in your switch statement
+                switch (statusResult.bookStatus) {
                     case 'NEW':
-                        const newBook = new Book({ ...bookData, publisher: publisherId });
-                        await newBook.save();
-                        const newPricing = new BookPricing({ ...pricingData, book: newBook._id });
-                        await newPricing.save();
-                        stats.booksAdded++;
+                        // This case creates a new book and its pricing
+                        const publisherId = await findOrCreatePublishers(publisherData.publisher_name);
+                        let savedBook = null;
+                        try {
+                            const newBook = new Book({ ...bookData, publisher: publisherId });
+                            savedBook = await newBook.save();
+                            const newPricing = new BookPricing({ ...pricingData, book: savedBook._id });
+                            await newPricing.save();
+                            stats.booksAdded++;
+                            stats.pricesAdded++;
+                        } catch (dbError) {
+                            if (savedBook?._id) {
+                                await Book.findByIdAndDelete(savedBook._id);
+                            }
+                            throw new Error(`Database save failed: ${dbError.message}. Book creation rolled back.`);
+                        }
                         break;
 
                     case 'DUPLICATE':
-                        const pricingStatus = await checkPricingStatus(bookMatch.book, pricingData);
-                        if (pricingStatus.action === 'ADD_PRICE') {
-                            const newPricingForExisting = new BookPricing({ ...pricingData, book: bookMatch.book._id });
-                            await newPricingForExisting.save();
+                        // This case handles all pricing actions for duplicates
+                        const { existingBook, pricingId } = statusResult.details;
+
+                        if (statusResult.pricingStatus === 'ADD_PRICE') {
+                            const newPricing = new BookPricing({ ...pricingData, book: existingBook._id });
+                            await newPricing.save();
                             stats.pricesAdded++;
-                        } else if (pricingStatus.action === 'UPDATE_PRICE') {
-                            await BookPricing.findByIdAndUpdate(pricingStatus.details.pricingId, { rate: pricingData.rate, discount: pricingData.discount });
+                        } else if (statusResult.pricingStatus === 'UPDATE_PRICE') {
+                            await BookPricing.findByIdAndUpdate(pricingId, { rate: pricingData.rate, discount: pricingData.discount });
                             stats.pricesUpdated++;
-                        } else { // NO_CHANGE
+                        } else { // 'NO_CHANGE'
                             stats.skippedAsDuplicate++;
                         }
                         break;
 
                     case 'CONFLICT':
+                        // This case logs the conflict and skips the row
                         stats.skippedAsConflict++;
-                        stats.conflictDetails.push({ row: rowNum, data: row, conflict: bookMatch.conflictFields, message: bookMatch.message });
+                        stats.conflictDetails.push({
+                            row: rowNum,
+                            data: row,
+                            conflict: statusResult.details.conflictFields,
+                            message: statusResult.message
+                        });
                         break;
                 }
+                // --- END OF CHANGES ---
                 stats.processed++;
 
             } catch (error) {
@@ -330,6 +378,7 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
         return { success: false, message: "A fatal error occurred during the import.", error: error.message };
     }
 }
+
 
 // This bundles all your named exports into a single default object
 export default {

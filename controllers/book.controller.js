@@ -84,276 +84,276 @@ const isValidIsbn = (raw) => {
   if (clean.length === 13) return validateIsbn13(clean);
   return false;
 };
-export const checkBookStatus = async (req, res) => {
-  try {
-    const { bookData, pricingData, publisherData } = req.body;
+// export const checkBookStatus = async (req, res) => {
+//   try {
+//     const { bookData, pricingData, publisherData } = req.body;
 
-    if (!bookData || !pricingData) {
-      return res.status(400).json({ message: "bookData and pricingData are required" });
-    }
+//     if (!bookData || !pricingData) {
+//       return res.status(400).json({ message: "bookData and pricingData are required" });
+//     }
 
-    // Normalize ISBN early
-    if (bookData && bookData.isbn) {
-      bookData.isbn = cleanIsbnInput(bookData.isbn);
-      if (bookData.isbn && !isValidIsbn(bookData.isbn)) {
-        return res.status(400).json({ message: 'Invalid ISBN provided.' });
-      }
-    }
+//     // Normalize ISBN early
+//     if (bookData && bookData.isbn) {
+//       bookData.isbn = cleanIsbnInput(bookData.isbn);
+//       if (bookData.isbn && !isValidIsbn(bookData.isbn)) {
+//         return res.status(400).json({ message: 'Invalid ISBN provided.' });
+//       }
+//     }
 
-    const { isbn, other_code, title, author } = bookData;
-    const { source } = pricingData;
-    const { publisher_name } = publisherData
+//     const { isbn, other_code, title, author } = bookData;
+//     const { source } = pricingData;
+//     const { publisher_name } = publisherData
 
-    let existingBook = null;
-    let response = {};
-    const publisherId = await Publisher.findOne({ name: publisher_name });
+//     let existingBook = null;
+//     let response = {};
+//     const publisherId = await Publisher.findOne({ name: publisher_name });
     
-    // 🔹 1) If ISBN present → check by ISBN
-    if (isbn) {
-      existingBook = await Book.findOne({ isbn });
+//     // 🔹 1) If ISBN present → check by ISBN
+//     if (isbn) {
+//       existingBook = await Book.findOne({ isbn });
 
-      if (existingBook) {
-        const sameTitle = existingBook.title.toLowerCase() === title.toLowerCase();
-        const sameAuthor = existingBook.author.toLowerCase() === author.toLowerCase();
+//       if (existingBook) {
+//         const sameTitle = existingBook.title.toLowerCase() === title.toLowerCase();
+//         const sameAuthor = existingBook.author.toLowerCase() === author.toLowerCase();
 
-        if (sameTitle && sameAuthor) {
-          const sameYear = existingBook.year === bookData.year;
-          const samePublisher = existingBook.publisher === publisherId;
+//         if (sameTitle && sameAuthor) {
+//           const sameYear = existingBook.year === bookData.year;
+//           const samePublisher = existingBook.publisher === publisherId;
 
-          if (sameYear && samePublisher) {
-            response = {
-              status: "DUPLICATE",
-              message: "This book already exists in the system.",
-              existingBook,
-            };
-          } else {
-            response = {
-              status: "DUPLICATE",
-              message:
-                "This book already exists in the system. but some details (e.g., year or publisher) differ",
-              existingBook,
-              conflictFields: {
-                year: { old: existingBook.year, new: bookData.year },
-                publisher_name: {
-                  old: existingBook.publisher_name,
-                  new: bookData.publisher_name,
-                },
-              },
-            };
-          }
-        } else if (sameTitle && !sameAuthor) {
-          response = {
-            status: "AUTHOR_CONFLICT",
-            message: "Conflict detected: A book with this ISBN and title already exists but has different details. Please verify.",
-            existingBook,
-            newData: bookData,
-            conflictFields: {
-              author: { old: existingBook.author, new: author },
-            },
-          };
+//           if (sameYear && samePublisher) {
+//             response = {
+//               status: "DUPLICATE",
+//               message: "This book already exists in the system.",
+//               existingBook,
+//             };
+//           } else {
+//             response = {
+//               status: "DUPLICATE",
+//               message:
+//                 "This book already exists in the system. but some details (e.g., year or publisher) differ",
+//               existingBook,
+//               conflictFields: {
+//                 year: { old: existingBook.year, new: bookData.year },
+//                 publisher_name: {
+//                   old: existingBook.publisher_name,
+//                   new: bookData.publisher_name,
+//                 },
+//               },
+//             };
+//           }
+//         } else if (sameTitle && !sameAuthor) {
+//           response = {
+//             status: "AUTHOR_CONFLICT",
+//             message: "Conflict detected: A book with this ISBN and title already exists but has different details. Please verify.",
+//             existingBook,
+//             newData: bookData,
+//             conflictFields: {
+//               author: { old: existingBook.author, new: author },
+//             },
+//           };
 
-        } else {
-          response = {
-            status: "CONFLICT",
-            message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
-            existingBook,
-            newData: bookData,
-            conflictFields: {
-              title: !sameTitle ? { old: existingBook.title, new: title } : null,
-              author: !sameAuthor ? { old: existingBook.author, new: author } : null,
-            },
-          };
-          return res.json(response);
-        }
+//         } else {
+//           response = {
+//             status: "CONFLICT",
+//             message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
+//             existingBook,
+//             newData: bookData,
+//             conflictFields: {
+//               title: !sameTitle ? { old: existingBook.title, new: title } : null,
+//               author: !sameAuthor ? { old: existingBook.author, new: author } : null,
+//             },
+//           };
+//           return res.json(response);
+//         }
 
-        // ✅ Book found → check pricing
-        return await handlePricingCheck(res, existingBook, pricingData, response);
-      }
-    }
+//         // ✅ Book found → check pricing
+//         return await handlePricingCheck(res, existingBook, pricingData, response);
+//       }
+//     }
 
-    // 🔹 2) If ISBN not found OR not present → check by other_code first, then Title + Author
-    if (!existingBook) {
-      // Check by other_code if present
-      if (other_code) {
-        existingBook = await Book.findOne({ other_code });
+//     // 🔹 2) If ISBN not found OR not present → check by other_code first, then Title + Author
+//     if (!existingBook) {
+//       // Check by other_code if present
+//       if (other_code) {
+//         existingBook = await Book.findOne({ other_code });
 
-        if (existingBook) {
-          const sameTitle = existingBook.title.toLowerCase() === title.toLowerCase();
-          const sameAuthor = existingBook.author.toLowerCase() === author.toLowerCase();
+//         if (existingBook) {
+//           const sameTitle = existingBook.title.toLowerCase() === title.toLowerCase();
+//           const sameAuthor = existingBook.author.toLowerCase() === author.toLowerCase();
 
-          if (sameTitle && sameAuthor) {
-            const sameYear = existingBook.year === bookData.year;
-            const samePublisher = existingBook.publisher === publisherId;
+//           if (sameTitle && sameAuthor) {
+//             const sameYear = existingBook.year === bookData.year;
+//             const samePublisher = existingBook.publisher === publisherId;
 
-            if (sameYear && samePublisher) {
-              response = {
-                status: "DUPLICATE",
-                message: "This book already exists in the system.",
-                existingBook,
-              };
-            } else {
-              response = {
-                status: "DUPLICATE",
-                message:
-                  "This book already exists in the system. but some details (e.g., year or publisher) differ",
-                existingBook,
-                conflictFields: {
-                  year: { old: existingBook.year, new: bookData.year },
-                  publisher_name: {
-                    old: existingBook.publisher_name,
-                    new: bookData.publisher_name,
-                  },
-                },
-              };
-            }
-            return await handlePricingCheck(res, existingBook, pricingData, response);
-          } else {
-            response = {
-              status: "CONFLICT",
-              message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
-              existingBook,
-              newData: bookData,
-              conflictFields: {
-                title: !sameTitle ? { old: existingBook.title, new: title } : null,
-                author: !sameAuthor ? { old: existingBook.author, new: author } : null,
-              },
-            };
-            return res.json(response);
-          }
-        }
-      }
+//             if (sameYear && samePublisher) {
+//               response = {
+//                 status: "DUPLICATE",
+//                 message: "This book already exists in the system.",
+//                 existingBook,
+//               };
+//             } else {
+//               response = {
+//                 status: "DUPLICATE",
+//                 message:
+//                   "This book already exists in the system. but some details (e.g., year or publisher) differ",
+//                 existingBook,
+//                 conflictFields: {
+//                   year: { old: existingBook.year, new: bookData.year },
+//                   publisher_name: {
+//                     old: existingBook.publisher_name,
+//                     new: bookData.publisher_name,
+//                   },
+//                 },
+//               };
+//             }
+//             return await handlePricingCheck(res, existingBook, pricingData, response);
+//           } else {
+//             response = {
+//               status: "CONFLICT",
+//               message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
+//               existingBook,
+//               newData: bookData,
+//               conflictFields: {
+//                 title: !sameTitle ? { old: existingBook.title, new: title } : null,
+//                 author: !sameAuthor ? { old: existingBook.author, new: author } : null,
+//               },
+//             };
+//             return res.json(response);
+//           }
+//         }
+//       }
 
-      // If no match by other_code, check by Title + Author
-      if (!existingBook) {
-        existingBook = await Book.findOne({
-          title: new RegExp(`^${title}$`, "i"),
-        });
-      }
+//       // If no match by other_code, check by Title + Author
+//       if (!existingBook) {
+//         existingBook = await Book.findOne({
+//           title: new RegExp(`^${title}$`, "i"),
+//         });
+//       }
 
-      if (existingBook) {
-        const sameAuthor = existingBook.author.toLowerCase() === author.toLowerCase();
+//       if (existingBook) {
+//         const sameAuthor = existingBook.author.toLowerCase() === author.toLowerCase();
 
-        if (sameAuthor) {
-          const sameYear = existingBook.year === bookData.year;
-          const samePublisher = existingBook.publisher === publisherId;
+//         if (sameAuthor) {
+//           const sameYear = existingBook.year === bookData.year;
+//           const samePublisher = existingBook.publisher === publisherId;
 
-          if (sameYear && samePublisher) {
-            response = {
-              status: "DUPLICATE",
-              message: "This book already exists in the system.",
-              existingBook,
-              isbn: { old: existingBook.isbn, new: bookData.isbn },
-              other_code: { old: existingBook.other_code, new: bookData.other_code },
-            };
-          } else {
-            response = {
-              status: "DUPLICATE",
-              message:
-                "This book already exists in the system.but some details (e.g., year or publisher) differ",
-              existingBook,
-              conflictFields: {
-                isbn: { old: existingBook.isbn, new: bookData.isbn },
-                other_code: { old: existingBook.other_code, new: bookData.other_code },
-                year: { old: existingBook.year, new: bookData.year },
-                publisher_name: {
-                  old: existingBook.publisher_name,
-                  new: bookData.publisher_name,
-                },
-              },
-            };
-          }
-        } else {
-          response = {
-            status: "AUTHOR_CONFLICT",
-            message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
-            existingBook,
-            newData: bookData,
-            conflictFields: {
-              isbn: { old: existingBook.isbn, new: bookData.isbn },
-              author: { old: existingBook.author, new: author },
-            },
-          };
-        }
+//           if (sameYear && samePublisher) {
+//             response = {
+//               status: "DUPLICATE",
+//               message: "This book already exists in the system.",
+//               existingBook,
+//               isbn: { old: existingBook.isbn, new: bookData.isbn },
+//               other_code: { old: existingBook.other_code, new: bookData.other_code },
+//             };
+//           } else {
+//             response = {
+//               status: "DUPLICATE",
+//               message:
+//                 "This book already exists in the system.but some details (e.g., year or publisher) differ",
+//               existingBook,
+//               conflictFields: {
+//                 isbn: { old: existingBook.isbn, new: bookData.isbn },
+//                 other_code: { old: existingBook.other_code, new: bookData.other_code },
+//                 year: { old: existingBook.year, new: bookData.year },
+//                 publisher_name: {
+//                   old: existingBook.publisher_name,
+//                   new: bookData.publisher_name,
+//                 },
+//               },
+//             };
+//           }
+//         } else {
+//           response = {
+//             status: "AUTHOR_CONFLICT",
+//             message: "Conflict detected: A book with this ISBN already exists but has different details. Please verify.",
+//             existingBook,
+//             newData: bookData,
+//             conflictFields: {
+//               isbn: { old: existingBook.isbn, new: bookData.isbn },
+//               author: { old: existingBook.author, new: author },
+//             },
+//           };
+//         }
 
-        // ✅ Book found → check pricing
-        return await handlePricingCheck(res, existingBook, pricingData, response);
-      }
-    }
+//         // ✅ Book found → check pricing
+//         return await handlePricingCheck(res, existingBook, pricingData, response);
+//       }
+//     }
 
-    // 🔹 3) If no match found → New book + price
-    // const newBook = new Book(bookData);
+//     // 🔹 3) If no match found → New book + price
+//     // const newBook = new Book(bookData);
 
 
-    // const newPricing = new BookPricing({ ...pricingData, book: newBook._id });
+//     // const newPricing = new BookPricing({ ...pricingData, book: newBook._id });
 
-    response = {
-      status: "NEW",
-      message: "No matching book found. Inserted as new book.",
-      newData: bookData,
-      pricingAction: "PRICE_ADDED",
-    };
+//     response = {
+//       status: "NEW",
+//       message: "No matching book found. Inserted as new book.",
+//       newData: bookData,
+//       pricingAction: "PRICE_ADDED",
+//     };
 
-    return res.json(response);
-  } catch (error) {
-    console.error("Error checking duplicate:", error);
-    res
-      .status(500)
-      .json({ message: "Internal server error", error: error.message });
-  }
-};
+//     return res.json(response);
+//   } catch (error) {
+//     console.error("Error checking duplicate:", error);
+//     res
+//       .status(500)
+//       .json({ message: "Internal server error", error: error.message });
+//   }
+// };
 
 // 🔹 Helper for Pricing Logic
-const handlePricingCheck = async (res, existingBook, pricingData, baseResponse) => {
-  const { source, rate, discount } = pricingData;
+// const handlePricingCheck = async (res, existingBook, pricingData, baseResponse) => {
+//   const { source, rate, discount } = pricingData;
 
-  const existingPricing = await BookPricing.findOne({
-    book: existingBook._id,
-    source,
-  });
+//   const existingPricing = await BookPricing.findOne({
+//     book: existingBook._id,
+//     source,
+//   });
 
-  if (!existingPricing) {
-    return res.json({
-      ...baseResponse,
-      pricingAction: "ADD_PRICE",
-      message: `${baseResponse.message} | Pricing source is new, add pricing.`,
-      bookId: existingBook._id,
-    });
-  }
+//   if (!existingPricing) {
+//     return res.json({
+//       ...baseResponse,
+//       pricingAction: "ADD_PRICE",
+//       message: `${baseResponse.message} | Pricing source is new, add pricing.`,
+//       bookId: existingBook._id,
+//     });
+//   }
 
-  const differences = [];
-  if (existingPricing.rate !== rate) {
-    differences.push({ field: "rate", existing: existingPricing.rate, new: rate });
-  }
-  if (existingPricing.discount !== discount) {
-    differences.push({
-      field: "discount",
-      existing: existingPricing.discount,
-      new: discount,
-    });
-  }
+//   const differences = [];
+//   if (existingPricing.rate !== rate) {
+//     differences.push({ field: "rate", existing: existingPricing.rate, new: rate });
+//   }
+//   if (existingPricing.discount !== discount) {
+//     differences.push({
+//       field: "discount",
+//       existing: existingPricing.discount,
+//       new: discount,
+//     });
+//   }
 
-  if (differences.length > 0) {
-    return res.json({
-      ...baseResponse,
-      pricingAction: "UPDATE_POSSIBLE",
-      message: baseResponse.message,
-      differences,
-      bookId: existingBook._id,
-      pricingId: existingPricing._id,
-      // pricingAction: "UPDATE_PRICE",
-    });
-  }
+//   if (differences.length > 0) {
+//     return res.json({
+//       ...baseResponse,
+//       pricingAction: "UPDATE_POSSIBLE",
+//       message: baseResponse.message,
+//       differences,
+//       bookId: existingBook._id,
+//       pricingId: existingPricing._id,
+//       // pricingAction: "UPDATE_PRICE",
+//     });
+//   }
 
-  return res.json({
+//   return res.json({
 
-    ...baseResponse,
-    status: "DUPLICATE",
-    pricingAction: "NO_CHANGE",
-    message: baseResponse.message,
-    bookId: existingBook._id,
-    pricingId: existingPricing._id,
-  });
-};
+//     ...baseResponse,
+//     status: "DUPLICATE",
+//     pricingAction: "NO_CHANGE",
+//     message: baseResponse.message,
+//     bookId: existingBook._id,
+//     pricingId: existingPricing._id,
+//   });
+// };
 
 export const createOrUpdateBook = async (req, res) => {
   const { bookData, pricingData, bookId, pricingId, status, pricingAction, publisherData } = req.body;
