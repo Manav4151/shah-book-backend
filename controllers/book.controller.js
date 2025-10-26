@@ -9,35 +9,6 @@ import { create } from 'domain';
 import Publisher from '../models/publisher.schema.js';
 
 
-/**
- * A helper function to find an existing publisher by name or create a new one.
- * This is a critical step for ensuring data integrity.
- * @param {string} publisherName - The name of the publisher.
- * @returns {Promise<string>} - The ObjectId of the publisher.
- */
-const getOrCreatePublisher = async (publisherName) => {
-  if (!publisherName || typeof publisherName !== 'string' || publisherName.trim() === '') {
-    // Handle cases where publisher name is missing or invalid
-    // Depending on requirements, you could throw an error or return null
-    throw new Error('Publisher name is required and must be a non-empty string.');
-  }
-
-  const trimmedName = publisherName.trim();
-
-  // Find a publisher with a case-insensitive match
-  const existingPublisher = await Publisher.findOne({
-    name: new RegExp(`^${trimmedName}$`, 'i')
-  });
-
-  if (existingPublisher) {
-    return existingPublisher._id;
-  }
-
-  // If no publisher is found, create a new one
-  const newPublisher = await Publisher.create({ name: trimmedName });
-  return newPublisher._id;
-};
-
 // --- ISBN Helpers ---
 const cleanIsbnInput = (raw) => {
   if (!raw || typeof raw !== 'string') return '';
@@ -107,7 +78,7 @@ const isValidIsbn = (raw) => {
 //     let existingBook = null;
 //     let response = {};
 //     const publisherId = await Publisher.findOne({ name: publisher_name });
-    
+
 //     // 🔹 1) If ISBN present → check by ISBN
 //     if (isbn) {
 //       existingBook = await Book.findOne({ isbn });
@@ -354,7 +325,27 @@ const isValidIsbn = (raw) => {
 //     pricingId: existingPricing._id,
 //   });
 // };
+export const getOrCreatePublisher = async (publisherName) => {
+  if (!publisherName || typeof publisherName !== 'string' || publisherName.trim() === '') {
+    // Handle cases where publisher name is missing or invalid
+    // Depending on requirements, you could throw an error or return null
+    throw new Error('Publisher name is required and must be a non-empty string.');
+  }
 
+  const trimmedName = publisherName.trim().toUpperCase();
+
+  // Find a publisher with a case-insensitive match
+  const existingPublisher = await Publisher.findOne({
+    name: trimmedName
+  });
+  if (existingPublisher) {
+    return existingPublisher._id;
+  }
+
+  // If no publisher is found, create a new one
+  const newPublisher = await Publisher.create({ name: trimmedName });
+  return newPublisher._id;
+};
 export const createOrUpdateBook = async (req, res) => {
   const { bookData, pricingData, bookId, pricingId, status, pricingAction, publisherData } = req.body;
 
@@ -375,14 +366,8 @@ export const createOrUpdateBook = async (req, res) => {
   if (status === 'NEW') {
     try {
 
-      const existingPublisher = await Publisher.findOne({ name: publisherData.name });
-      if (existingPublisher) {
-        bookData.publisher = existingPublisher._id;
-      } else {
-        const newPublisher = new Publisher(publisherData);
-        const savedPublisher = await newPublisher.save();
-        bookData.publisher = savedPublisher._id;
-      }
+      const publisherID = getOrCreatePublisher(publisherData.publisher_name);
+      bookData.publisher = publisherID;
       const newBook = new Book(bookData);
       const savedBook = await newBook.save();
 
@@ -447,12 +432,12 @@ export const createOrUpdateBook = async (req, res) => {
 // --- GET ALL BOOKS (with Pagination) ---
 export const getBooks = async (req, res) => {
   try {
-    logger.info('📚 Books API called', { 
-      page: req.query.page, 
-      limit: req.query.limit, 
-      filters: req.query 
+    logger.info('📚 Books API called', {
+      page: req.query.page,
+      limit: req.query.limit,
+      filters: req.query
     });
-    
+
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
@@ -472,9 +457,10 @@ export const getBooks = async (req, res) => {
     // **Corrected Publisher Filtering Logic**
     // 1. If a publisher_name filter is provided...
     if (publisher_name) {
+      const cleanpublisher_name = publisher_name.trim().toUpperCase();
       // 2. Find all publishers that match the name (case-insensitive).
       const matchingPublishers = await Publisher.find(
-        { name: { $regex: publisher_name, $options: 'i' } }
+        { name: cleanpublisher_name }
       ).select('_id'); // We only need their IDs.
 
       // 3. Get an array of just the IDs.
@@ -496,7 +482,7 @@ export const getBooks = async (req, res) => {
       .skip(skip)
       .limit(limit)
       .sort({ createdAt: -1 });
-    
+
     logger.info('✅ Books fetched successfully:', books.length, 'books');
 
     // --- The rest of your pricing logic can remain largely the same ---
@@ -558,7 +544,7 @@ export const getBooks = async (req, res) => {
       query: req.query,
       timestamp: new Date().toISOString()
     });
-    
+
     res.status(500).json({
       success: false,
       message: 'Server error while fetching books.',
@@ -685,6 +671,11 @@ export const getBookPricing = async (req, res) => {
   try {
     // Get book details first
     const book = await Book.findById(bookId);
+
+
+    const publisher = await Publisher.findById(book.publisher);
+
+
     if (!book) {
       return res.status(404).json({
         success: false,
@@ -721,7 +712,7 @@ export const getBookPricing = async (req, res) => {
         author: book.author,
         isbn: book.isbn,
         year: book.year,
-        publisher_name: book.publisher_name,
+        publisher_name: publisher.name,
         classification: book.classification,
         binding_type: book.binding_type,
         createdAt: book.createdAt,
@@ -1159,6 +1150,26 @@ export const getBookSuggestions = async (req, res) => {
     res.json({ success: true, books });
   } catch (error) {
     logger.error('Error fetching book suggestions:', error);
+    res.status(500).json({ success: false, message: 'Server error.' });
+  }
+};
+
+export const markAsOutofPrint = async (req, res) => {
+  try {
+    const { bookId } = req.params;
+    const updatedBook = await Book.findByIdAndUpdate(
+      bookId,
+      { outOfPrint: true, },
+      { new: true }  // returns updated document
+    );
+
+    if (!updatedBook) {
+      return res.status(404).json({ success: false, message: 'Book not found.' });
+    }
+
+    res.json({ success: true, message: 'Book marked as out of print.', book: updatedBook });
+  } catch (error) {
+    logger.error('Error marking book as out of print:', error);
     res.status(500).json({ success: false, message: 'Server error.' });
   }
 };

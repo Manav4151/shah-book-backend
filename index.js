@@ -5,13 +5,14 @@ import router from "./routes/book.routes.js";
 import emailRouter from "./routes/email.routes.js";
 import quotationRouter from "./routes/quotation.routes.js";
 import commonRouter from "./routes/common.routes.js";
- import { connectDB } from "./config/db.js";
+import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";
 import { toNodeHandler } from "better-auth/node";
 import { errorHandler, notFoundHandler } from "./middleware/errorhandler.middleware.js";
 const app = express();
 const PORT = process.env.PORT || 8000;
-
+// --- Sanity Check ---
+console.log("--- SERVER STARTING ---");
 // --- Middleware ---
 // Enable Cross-Origin Resource Sharing to allow requests from your frontend
 app.use(cors({
@@ -33,8 +34,14 @@ app.use(express.urlencoded({ extended: true }));
 connectDB();
 
 // --- authentication middleware ---
-// Mount better-auth handler
-app.use("/api/auth", toNodeHandler(auth));
+// --- Authentication Middleware ---
+console.log("Attempting to mount better-auth handler...");
+try {
+  app.use("/api/auth", toNodeHandler(auth));
+  console.log("✅ SUCCESS: better-auth handler mounted at /api/auth.");
+} catch (error) {
+  console.error("❌ FAILED to mount better-auth handler:", error);
+}
 
 // --- Static Files ---
 // Serve static files from public directory
@@ -47,7 +54,7 @@ app.use('/api/books', router);
 app.use('/api/emails', emailRouter);
 
 // Use the quotation routes for any request to /api/quotation
-app.use('/api/quotations',quotationRouter )  ; 
+app.use('/api/quotations', quotationRouter);
 
 // customer routes
 app.use('/api', commonRouter);
@@ -66,5 +73,6 @@ app.use(errorHandler);
 
 // --- Start the server ---
 app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
+  console.log(`🚀 Server is running on port ${PORT}`);
+  console.log(`👉 Admin Panel should be at: http://localhost:${PORT}/api/auth/admin`);
 });

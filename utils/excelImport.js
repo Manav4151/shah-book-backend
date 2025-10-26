@@ -25,6 +25,7 @@ import Publisher from '../models/publisher.schema.js';
 import { logger } from '../lib/logger.js';
 import { cleanIsbnForValidation, validateISBN } from './isbnValidator.js';
 import { determineBookStatus } from '../controllers/duplicate.controller.js';
+import { getOrCreatePublisher } from '../controllers/book.controller.js';
 
 // -----------------------------------------------------------------------------
 // SECTION 2: STEP 1 - VALIDATION & MAPPING
@@ -151,27 +152,9 @@ export async function validateExcelMapping(filePath) {
 // }
 
 // new logic if not working than uncomment above one and remove below one
-// --- HELPER: Replicates your original findOrCreatePublisher logic in a bulk context ---
-async function findOrCreatePublishers(publisherNames) {
-    const names = [...publisherNames];
-    const existing = await Publisher.find({ name: { $in: names } });
-    const existingNames = new Set(existing.map(p => p.name));
-    const newPublisherDocs = [];
 
-    for (const name of names) {
-        if (!existingNames.has(name)) {
-            newPublisherDocs.push({ name });
-        }
-    }
 
-    if (newPublisherDocs.length > 0) {
-        await Publisher.insertMany(newPublisherDocs);
-    }
 
-    // Return a complete map of all publishers for fast lookups
-    const allPublishers = await Publisher.find({ name: { $in: names } });
-    return new Map(allPublishers.map(p => [p.name, p._id]));
-}
 /**
  * Processes a single Excel row using a user-approved mapping and transforms it
  * into a structured object identical to the single-entry API's request body.
@@ -293,7 +276,7 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
                 if (!bookData.title || !pricingData.rate) {
                     throw new Error("Missing required data (Title or Price).");
                 }
-                console.log("publisherdata !!!!!!!!!!!!!!!!!!!", publisherData);
+
 
                 // 1. Call the new helper instead of the old findBookMatch
                 const statusResult = await determineBookStatus(bookData, pricingData, publisherData);
@@ -304,7 +287,7 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
                 switch (statusResult.bookStatus) {
                     case 'NEW':
                         // This case creates a new book and its pricing
-                        const publisherId = await findOrCreatePublishers(publisherData.publisher_name);
+                        const publisherId = await getOrCreatePublisher(publisherData.publisher_name);
                         let savedBook = null;
                         try {
                             const newBook = new Book({ ...bookData, publisher: publisherId });
@@ -330,6 +313,8 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
                             await newPricing.save();
                             stats.pricesAdded++;
                         } else if (statusResult.pricingStatus === 'UPDATE_PRICE') {
+                            logger.info('pricingId', pricingId);
+                            logger.info('pricingData', pricingData);
                             await BookPricing.findByIdAndUpdate(pricingId, { rate: pricingData.rate, discount: pricingData.discount });
                             stats.pricesUpdated++;
                         } else { // 'NO_CHANGE'

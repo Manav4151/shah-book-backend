@@ -181,8 +181,9 @@ export const isValidIsbn = (isbn) => {
  */
 const findPublisherId = async (publisherName) => {
   if (!publisherName) return null;
+  const cleanName = publisherName.trim().toUpperCase();
   const existingPublisher = await Publisher.findOne({
-    name: new RegExp(`^${publisherName.trim()}$`, 'i')
+    name: cleanName
   });
   return existingPublisher ? existingPublisher._id : null;
 };
@@ -291,6 +292,14 @@ export const checkBookStatus = async (req, res) => {
           });
         }
       }
+      else {
+        return res.status(200).json({
+          bookStatus: 'NEW',
+          pricingStatus: 'ADD_PRICE', // A new book always requires adding a new price
+          message: 'No matching book found. It can be added as a new entry.',
+          details: {},
+        });
+      }
     }
 
     // Rule 4: If no ISBN match or no ISBN provided, check by Other Code.
@@ -330,16 +339,16 @@ export const checkBookStatus = async (req, res) => {
       if (bookByTitleAndPublisher) {
         // A book with the same title and publisher exists.
         // Rule 3: This is a CONFLICT if the new book has a different ISBN.
-        if (bookData.isbn && bookByTitleAndPublisher.isbn !== bookData.isbn) {
-          return res.status(200).json({
-            bookStatus: 'CONFLICT',
-            message: 'A book with this Title and Publisher already exists, but with a different ISBN.',
-            details: {
-              existingBook: bookByTitleAndPublisher,
-              conflictFields: { isbn: { old: bookByTitleAndPublisher.isbn, new: bookData.isbn } }
-            },
-          });
-        }
+        // if (bookData.isbn && bookByTitleAndPublisher.isbn !== bookData.isbn) {
+        //   return res.status(200).json({
+        //     bookStatus: 'CONFLICT',
+        //     message: 'A book with this Title and Publisher already exists, but with a different ISBN.',
+        //     details: {
+        //       existingBook: bookByTitleAndPublisher,
+        //       conflictFields: { isbn: { old: bookByTitleAndPublisher.isbn, new: bookData.isbn } }
+        //     },
+        //   });
+        // }
         // Rule 5: It's a DUPLICATE if identifiers are missing or match.
         const pricing = await checkPricingLogic(bookByTitleAndPublisher, pricingData);
         return res.status(200).json({
@@ -375,102 +384,101 @@ export const checkBookStatus = async (req, res) => {
  * @returns {Promise<object>} - A status object.
  */
 export const determineBookStatus = async (bookData, pricingData, publisherData) => {
-    const publisherId = await findPublisherId(publisherData.publisher_name);
+  const publisherId = await findPublisherId(publisherData.publisher_name);
 
-    // Rule 1 & 2: Check by ISBN first
-    if (bookData.isbn) {
-        const bookByIsbn = await Book.findOne({ isbn: bookData.isbn }).populate('publisher');
-        if (bookByIsbn) {
-            if (bookByIsbn.title.toLowerCase() === bookData.title.toLowerCase()) {
-                const pricing = await checkPricingLogic(bookByIsbn, pricingData);
-                return {
-                    bookStatus: 'DUPLICATE',
-                    pricingStatus: pricing.action,
-                    message: `Duplicate book found by ISBN. | ${pricing.message}`,
-                    details: { ...pricing.details, existingBook: bookByIsbn },
-                };
-            } else {
-                return {
-                    bookStatus: 'CONFLICT',
-                    message: 'A book with this ISBN already exists but has a different title.',
-                    details: {
-                        existingBook: bookByIsbn,
-                        conflictFields: { title: { old: bookByIsbn.title, new: bookData.title } }
-                    },
-                };
-            }
-        }
+  // Rule 1 & 2: Check by ISBN first
+  if (bookData.isbn) {
+    const bookByIsbn = await Book.findOne({ isbn: bookData.isbn }).populate('publisher');
+    if (bookByIsbn) {
+      if (bookByIsbn.title.toLowerCase() === bookData.title.toLowerCase()) {
+        const pricing = await checkPricingLogic(bookByIsbn, pricingData);
+        return {
+          bookStatus: 'DUPLICATE',
+          pricingStatus: pricing.action,
+          message: `Duplicate book found by ISBN. | ${pricing.message}`,
+          details: { ...pricing.details, existingBook: bookByIsbn },
+        };
+      } else {
+        return {
+          bookStatus: 'CONFLICT',
+          message: 'A book with this ISBN already exists but has a different title.',
+          details: {
+            existingBook: bookByIsbn,
+            conflictFields: { title: { old: bookByIsbn.title, new: bookData.title } }
+          },
+        };
+      }
     }
-
-    // Rule 4: Check by Other Code
-    if (bookData.other_code) {
-        const bookByCode = await Book.findOne({ other_code: bookData.other_code }).populate('publisher');
-        if (bookByCode) {
-            if (bookByCode.title.toLowerCase() === bookData.title.toLowerCase()) {
-                const pricing = await checkPricingLogic(bookByCode, pricingData);
-                return {
-                    bookStatus: 'DUPLICATE',
-                    pricingStatus: pricing.action,
-                    message: `Duplicate book found by Other Code. | ${pricing.message}`,
-                    details: { ...pricing.details, existingBook: bookByCode },
-                };
-            } else {
-                return {
-                    bookStatus: 'CONFLICT',
-                    message: 'A book with this Other Code already exists but has a different title.',
-                    details: {
-                        existingBook: bookByCode,
-                        conflictFields: { title: { old: bookByCode.title, new: bookData.title } }
-                    },
-                };
-            }
-        }
-    }
-
-    // Rule 3 & 5: Check by Title and Publisher
-    if (publisherId) {
-        const bookByTitleAndPublisher = await Book.findOne({
-            title: new RegExp(`^${bookData.title}$`, "i"),
-            publisher: publisherId
-        }).populate('publisher');
-
-        if (bookByTitleAndPublisher) {
-            if (bookData.isbn && bookByTitleAndPublisher.isbn !== bookData.isbn) {
-                return {
-                    bookStatus: 'CONFLICT',
-                    message: 'A book with this Title and Publisher already exists, but with a different ISBN.',
-                    details: {
-                        existingBook: bookByTitleAndPublisher,
-                        conflictFields: { isbn: { old: bookByTitleAndPublisher.isbn, new: bookData.isbn } }
-                    },
-                };
-            }
-            // *** Refinement: Also check for other_code conflict ***
-            if (bookData.other_code && bookByTitleAndPublisher.other_code !== bookData.other_code) {
-                return {
-                    bookStatus: 'CONFLICT',
-                    message: 'A book with this Title and Publisher already exists, but with a different Other Code.',
-                    details: {
-                        existingBook: bookByTitleAndPublisher,
-                        conflictFields: { other_code: { old: bookByTitleAndPublisher.other_code, new: bookData.other_code } }
-                    },
-                };
-            }
-            const pricing = await checkPricingLogic(bookByTitleAndPublisher, pricingData);
-            return {
-                bookStatus: 'DUPLICATE',
-                pricingStatus: pricing.action,
-                message: `Duplicate book found by Title and Publisher. | ${pricing.message}`,
-                details: { ...pricing.details, existingBook: bookByTitleAndPublisher },
-            };
-        }
-    }
-
-    // Rule 6 & 7: Fallback to NEW
-    return {
+    else {
+      return {
         bookStatus: 'NEW',
-        pricingStatus: 'ADD_PRICE',
-        message: 'No matching book found.',
+        pricingStatus: 'ADD_PRICE', // A new book always requires adding a new price
+        message: 'No matching book found. It can be added as a new entry.',
         details: {},
-    };
+      };
+    }
+  }
+
+  // Rule 4: Check by Other Code
+  else if (bookData.other_code) {
+    const bookByCode = await Book.findOne({ other_code: bookData.other_code }).populate('publisher');
+    if (bookByCode) {
+      if (bookByCode.title.toLowerCase() === bookData.title.toLowerCase()) {
+        const pricing = await checkPricingLogic(bookByCode, pricingData);
+        return {
+          bookStatus: 'DUPLICATE',
+          pricingStatus: pricing.action,
+          message: `Duplicate book found by Other Code. | ${pricing.message}`,
+          details: { ...pricing.details, existingBook: bookByCode },
+        };
+      } else {
+        return {
+          bookStatus: 'CONFLICT',
+          message: 'A book with this Other Code already exists but has a different title.',
+          details: {
+            existingBook: bookByCode,
+            conflictFields: { title: { old: bookByCode.title, new: bookData.title } }
+          },
+        };
+      }
+    }
+  }
+
+  // Rule 3 & 5: Check by Title and Publisher
+  if (publisherId) {
+    const bookByTitleAndPublisher = await Book.findOne({
+      title: new RegExp(`^${bookData.title}$`, "i"),
+      publisher: publisherId
+    }).populate('publisher');
+
+    if (bookByTitleAndPublisher) {
+
+      // *** Refinement: Also check for other_code conflict ***
+      if (bookData.other_code && bookByTitleAndPublisher.other_code !== bookData.other_code) {
+        return {
+          bookStatus: 'CONFLICT',
+          message: 'A book with this Title and Publisher already exists, but with a different Other Code.',
+          details: {
+            existingBook: bookByTitleAndPublisher,
+            conflictFields: { other_code: { old: bookByTitleAndPublisher.other_code, new: bookData.other_code } }
+          },
+        };
+      }
+      const pricing = await checkPricingLogic(bookByTitleAndPublisher, pricingData);
+      return {
+        bookStatus: 'DUPLICATE',
+        pricingStatus: pricing.action,
+        message: `Duplicate book found by Title and Publisher. | ${pricing.message}`,
+        details: { ...pricing.details, existingBook: bookByTitleAndPublisher },
+      };
+    }
+  }
+
+  // Rule 6 & 7: Fallback to NEW
+  return {
+    bookStatus: 'NEW',
+    pricingStatus: 'ADD_PRICE',
+    message: 'No matching book found.',
+    details: {},
+  };
 };
