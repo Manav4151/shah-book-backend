@@ -136,23 +136,6 @@ export async function validateExcelMapping(filePath) {
 
 // --- Helper Functions for the Import Process ---
 
-/**
- * Finds a publisher by name or creates it if it doesn't exist.
- * @param {string} publisherName - The name of the publisher.
- * @returns {Promise<string|null>} The MongoDB ObjectId of the publisher.
- */
-// async function findOrCreatePublisher(publisherName) {
-//     if (!publisherName || !publisherName.trim()) return null;
-//     const cleanName = publisherName.trim();
-//     let publisher = await Publisher.findOne({ name: cleanName });
-//     if (publisher) return publisher._id;
-//     const newPublisher = new Publisher({ name: cleanName });
-//     await newPublisher.save();
-//     return newPublisher._id;
-// }
-
-// new logic if not working than uncomment above one and remove below one
-
 
 
 /**
@@ -164,57 +147,80 @@ export async function validateExcelMapping(filePath) {
  * @param {string} sourceName - The name for this import batch (e.g., the original filename).
  * @returns {{bookData: object, pricingData: object, publisherData: object}} - The structured, cleaned, and type-coerced data.
  */
-function processRowData(row, mapping, sourceName) {
-    // 1. Initialize the final data structure.
-    const data = {
-        bookData: {},
-        pricingData: { source: sourceName }, // Pre-populate with the source name
-        publisherData: {}
-    };
+function processBookRow(row, mapping, sourceName, helpers = {}) {
+    const {
+        validateISBN = () => true, // default placeholder
+        cleanIsbnForValidation = v => v.replace(/[-\s]/g, '') // default ISBN cleaning
+    } = helpers;
 
-    // 2. Define which database fields belong to which model. This is the sorting key.
+    // Define collection groups
     const pricingFields = ['rate', 'currency', 'discount'];
     const publisherFields = ['publisher_name'];
 
-    // 3. Iterate through the user-approved mapping to process the row.
+
+    // Initialize clean containers
+    const data = {
+        bookData: {},
+        pricingData: { source: sourceName },
+        publisherData: {}
+    };
+
+    // Iterate through row based on mapping
     for (const excelHeader in mapping) {
-        const schemaField = mapping[excelHeader]; // e.g., "title", "rate", "publisher_name"
+        const schemaField = mapping[excelHeader]; // db field
         const rawValue = row[excelHeader];
 
-        // 4. Process only if the cell has a value.
-        if (rawValue !== undefined && rawValue !== null) {
-            const cleanValue = String(rawValue).trim();
-            if (cleanValue) { // Ensure the value is not just whitespace
-                // 5. Sort the clean value into the correct object.
-                if (pricingFields.includes(schemaField)) {
-                    data.pricingData[schemaField] = cleanValue;
-                } else if (publisherFields.includes(schemaField)) {
-                    data.publisherData[schemaField] = cleanValue;
-                } else {
-                    data.bookData[schemaField] = cleanValue;
-                }
-            }
+        if (rawValue === undefined || rawValue === null) continue;
+
+        const cleanValue = String(rawValue).trim();
+        if (!cleanValue) continue; // ignore empty values
+
+        // Assign to appropriate object
+        if (pricingFields.includes(schemaField)) {
+            data.pricingData[schemaField] = cleanValue;
+        } else if (publisherFields.includes(schemaField)) {
+            data.publisherData[schemaField] = cleanValue;
+        } else {
+            data.bookData[schemaField] = cleanValue;
+        }
+    }
+    logger.error('data', data);
+    // Final Cleanup & Type Conversion
+
+    // ISBN validation and cleaning
+    if (data.bookData.isbn) {
+        if (validateISBN(data.bookData.isbn)) {
+            data.bookData.isbn = cleanIsbnForValidation(data.bookData.isbn);
+        } else {
+            data.bookData.isbn = null;
         }
     }
 
-    // 6. Perform final data cleaning, type coercion, and set default values.
-    if (data.bookData.year) {
-        data.bookData.year = Number(data.bookData.year) || null;
-    }
-    if (data.bookData.isbn) {
-        // Assuming you have this helper available
-        data.bookData.isbn = validateISBN(data.bookData.isbn) ? cleanIsbnForValidation(data.bookData.isbn) : null;
+    // Convert numbers safely
+    const numberFields = ['year', 'rate', 'discount'];
+    numberFields.forEach(field => {
+        if (data.bookData[field]) data.bookData[field] = Number(data.bookData[field]) || null;
+        if (data.pricingData[field]) data.pricingData[field] = Number(data.pricingData[field]) || null;
+    });
+
+    // Default discount
+    if (data.pricingData.discount === undefined || data.pricingData.discount === null) {
+        data.pricingData.discount = 0;
     }
 
-    if (data.pricingData.rate) {
-        data.pricingData.rate = Number(data.pricingData.rate) || null;
-    }
-    data.pricingData.discount = data.pricingData.discount ? Number(data.pricingData.discount) : 0;
+    // Default currency
     if (!data.pricingData.currency) {
-        data.pricingData.currency = 'INR'; // Defaulting to INR as per your example
+        data.pricingData.currency = 'INR';
     }
 
-    // 7. Return the perfectly structured object, ready for your core logic.
+    // Standardize optional fields to null if missing
+    const optionalFields = ['classification', 'binding_type', 'edition', 'remarks'];
+    optionalFields.forEach(field => {
+        if (data.bookData[field] === undefined) {
+            data.bookData[field] = null;
+        }
+    });
+
     return data;
 }
 
@@ -272,11 +278,16 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
         for (const [index, row] of sheetData.entries()) {
             const rowNum = index + 2;
             try {
-                const { bookData, pricingData, publisherData } = processRowData(row, mapping, sourceName);
+                const { bookData, pricingData, publisherData } = processBookRow(row, mapping, sourceName, {
+                    validateISBN,
+                    cleanIsbnForValidation
+                  });
                 if (!bookData.title || !pricingData.rate) {
                     throw new Error("Missing required data (Title or Price).");
                 }
-
+                logger.error('bookData', bookData);
+                logger.error('pricingData', pricingData);
+                logger.error('publisherData', publisherData);
 
                 // 1. Call the new helper instead of the old findBookMatch
                 const statusResult = await determineBookStatus(bookData, pricingData, publisherData);

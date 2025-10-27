@@ -1,93 +1,117 @@
-import Template from '../models/template.schema.js';
-import crypto from 'crypto';
+import ImportTemplate from '../models/import.template.js';
+import { ApiResponse } from '../lib/api-response.js';
 
-// Create a stable fingerprint for a header array
-function fingerprintHeaders(headers) {
-  const normalized = Array.isArray(headers)
-    ? headers.map(h => (h || '').toString().trim()).filter(Boolean)
-    : [];
-  const joined = normalized.join('|').toLowerCase();
-  return crypto.createHash('sha1').update(joined).digest('hex');
-}
-
-// POST /api/templates
-export async function createTemplate(req, res) {
+// Get all templates (no filtering needed)
+export const getTemplates = async (req, res) => {
   try {
-    const { name, description, headers, mapping, sheetName } = req.body;
-    if (!name || !Array.isArray(headers) || !mapping || typeof mapping !== 'object') {
-      return res.status(400).json({ success: false, message: 'name, headers[], and mapping are required' });
-    }
+    console.log('Getting templates for user:', req.user?.id || 'anonymous');
+    
+    const templates = await ImportTemplate.find()
+      .select('name description mapping expectedHeaders userId usageCount lastUsedAt createdAt')
+      .sort({ lastUsedAt: -1, createdAt: -1 });
+    
+    console.log('Found templates:', templates.length);
+    console.log('Templates:', templates);
+    
+    res.json(ApiResponse.success(templates, 'Templates retrieved successfully'));
+  } catch (error) {
+    console.error('Error getting templates:', error);
+    res.status(500).json(ApiResponse.error('Failed to retrieve templates'));
+  }
+};
 
-    const createdBy = req.user?.id || req.user?.email || null;
-    const headersFingerprint = fingerprintHeaders(headers);
-
-    const template = await Template.create({
+// Create new template (no isPublic field)
+export const createTemplate = async (req, res) => {
+  try {
+    const { name, description, mapping, expectedHeaders } = req.body;
+    const userId = req.user?.id || `temp_user_${Date.now()}`; // Handle missing user with unique ID
+    
+    console.log('Creating template with data:', {
       name,
-      description: description || null,
-      headers,
+      description,
+      userId,
       mapping,
-      sheetName: sheetName || null,
-      createdBy,
-      headersFingerprint,
+      expectedHeaders
     });
-
-    return res.status(201).json({ success: true, data: template });
+    
+    const template = new ImportTemplate({
+      name,
+      description,
+      userId,
+      mapping,
+      expectedHeaders
+    });
+    
+    await template.save();
+    console.log('Template saved successfully:', template);
+    res.json(ApiResponse.success(template, 'Template created successfully'));
   } catch (error) {
-    return res.status(500).json({ success: false, message: 'Error creating template', error: error.message });
+    console.error('Error creating template:', error);
+    res.status(500).json(ApiResponse.error('Failed to create template'));
   }
-}
+};
 
-// GET /api/templates
-export async function listTemplates(req, res) {
-  try {
-    const createdBy = req.user?.id || req.user?.email || null;
-    const query = createdBy ? { $or: [{ createdBy }, { createdBy: null }] } : {};
-    const templates = await Template.find(query).sort({ updatedAt: -1 });
-    return res.status(200).json({ success: true, data: templates });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: 'Error fetching templates', error: error.message });
-  }
-}
-
-// GET /api/templates/match?headers=a&headers=b
-export async function matchTemplate(req, res) {
-  try {
-    const headers = Array.isArray(req.query.headers)
-      ? req.query.headers
-      : typeof req.query.headers === 'string'
-        ? [req.query.headers]
-        : [];
-
-    if (!headers.length) {
-      return res.status(400).json({ success: false, message: 'headers query params are required' });
-    }
-
-    const createdBy = req.user?.id || req.user?.email || null;
-    const headersFingerprint = fingerprintHeaders(headers);
-
-    const query = createdBy
-      ? { headersFingerprint, $or: [{ createdBy }, { createdBy: null }] }
-      : { headersFingerprint };
-
-    const template = await Template.findOne(query).sort({ updatedAt: -1 });
-    return res.status(200).json({ success: true, data: template });
-  } catch (error) {
-    return res.status(500).json({ success: false, message: 'Error matching template', error: error.message });
-  }
-}
-
-// GET /api/templates/:id
-export async function getTemplate(req, res) {
+// Get specific template (no ownership check needed)
+export const getTemplate = async (req, res) => {
   try {
     const { id } = req.params;
-    const template = await Template.findById(id);
+    
+    const template = await ImportTemplate.findById(id)
+      .populate('userId', 'name email');
+    
     if (!template) {
-      return res.status(404).json({ success: false, message: 'Template not found' });
+      return res.status(404).json(ApiResponse.error('Template not found'));
     }
-    return res.status(200).json({ success: true, data: template });
+    
+    res.json(ApiResponse.success(template, 'Template retrieved successfully'));
   } catch (error) {
-    return res.status(500).json({ success: false, message: 'Error fetching template', error: error.message });
+    res.status(500).json(ApiResponse.error('Failed to retrieve template'));
   }
-}
+};
 
+// Update template (only creator can update)
+export const updateTemplate = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id || 'anonymous';
+    const updateData = req.body;
+    
+    const template = await ImportTemplate.findOneAndUpdate(
+      { _id: id, userId }, // Only creator can update
+      updateData,
+      { new: true }
+    );
+    
+    if (!template) {
+      return res.status(404).json(ApiResponse.error('Template not found or you cannot update this template'));
+    }
+    
+    res.json(ApiResponse.success(template, 'Template updated successfully'));
+  } catch (error) {
+    console.error('Error updating template:', error);
+    res.status(500).json(ApiResponse.error('Failed to update template'));
+  }
+};
+
+// Delete template (only creator can delete)
+export const deleteTemplate = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user?.id || 'anonymous';
+    
+    const template = await ImportTemplate.findOneAndDelete({ 
+      _id: id, 
+      userId // Only creator can delete
+    });
+    
+    if (!template) {
+      return res.status(404).json(ApiResponse.error('Template not found or you cannot delete this template'));
+    }
+    
+    res.json(ApiResponse.success('Template deleted successfully'));
+  } catch (error) {
+    console.error('Error deleting template:', error);
+    res.status(500).json(ApiResponse.error('Failed to delete template'));
+  }
+};
 

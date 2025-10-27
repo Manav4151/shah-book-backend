@@ -553,109 +553,6 @@ export const getBooks = async (req, res) => {
     });
   }
 };
-// --- GET ALL BOOKS (with Pagination, Filtering, and Pricing) ---
-// export const getBooks = async (req, res) => {
-//   const page = parseInt(req.query.page) || 1;
-//   const limit = parseInt(req.query.limit) || 10;
-//   const skip = (page - 1) * limit;
-
-//   // Extract filter parameters
-//   const { title, author, isbn, year, classification, publisher_name, } = req.query;
-//   const publisher = await Publisher.findOne({ name: publisher_name });
-//   try {
-//     // Build filter object
-//     let filter = {};
-
-//     if (title) {
-//       filter.title = { $regex: title, $options: 'i' };
-//     }
-//     if (author) {
-//       filter.author = { $regex: author, $options: 'i' };
-//     }
-//     if (isbn) {
-//       filter.isbn = { $regex: isbn, $options: 'i' };
-//     }
-//     if (year) {
-//       filter.year = parseInt(year);
-//     }
-//     if (classification) {
-//       filter.classification = classification;
-//     }
-//     if (publisher_name) {
-//       filter.publisher = { $regex: publisher._id, $options: 'i' };
-//     }
-
-//     // Get books with filters
-//     const books = await Book.find(filter)
-//       .skip(skip)
-//       .limit(limit)
-//       .sort({ createdAt: -1 });
-
-//     // Get pricing data for all books
-//     const bookIds = books.map(book => book._id);
-//     const publisherIds = books.map(book => book.publisher);
-
-//     const pricingData = await BookPricing.find({ book: { $in: bookIds } })
-//       .select('book rate discount source currency last_updated');
-
-//     // Create a map of book ID to pricing data
-//     const pricingMap = {};
-//     pricingData.forEach(pricing => {
-//       if (!pricingMap[pricing.book]) {
-//         pricingMap[pricing.book] = [];
-//       }
-//       pricingMap[pricing.book].push(pricing);
-//     });
-
-//     // Add pricing data to books
-//     const booksWithPricing = books.map(book => {
-//       const bookObj = book.toObject();
-//       bookObj.pricing = pricingMap[book._id] || [];
-//       // Add a primary price (first pricing entry) for display
-//       bookObj.price = bookObj.pricing.length > 0 ? bookObj.pricing[0].rate : null;
-//       return bookObj;
-//     });
-
-//     // Get total count with same filters
-//     const totalBooks = await Book.countDocuments(filter);
-//     const totalPages = Math.ceil(totalBooks / limit);
-
-//     // Calculate statistics
-//     const stats = {
-//       totalBooks,
-//       currentPage: page,
-//       totalPages,
-//       hasNextPage: page < totalPages,
-//       hasPrevPage: page > 1,
-//       showing: {
-//         from: skip + 1,
-//         to: Math.min(skip + limit, totalBooks),
-//         total: totalBooks
-//       }
-//     };
-
-//     res.status(200).json({
-//       success: true,
-//       books: booksWithPricing,
-//       pagination: stats,
-//       filters: {
-//         title: title || null,
-//         author: author || null,
-//         isbn: isbn || null,
-//         year: year || null,
-//         classification: classification || null,
-//         publisher_name: publisher_name || null
-//       }
-//     });
-//   } catch (error) {
-//     console.error('Error fetching books:', error);
-//     res.status(500).json({
-//       success: false,
-//       message: 'Server error while fetching books.',
-//       error: error.message
-//     });
-//   }
-// };
 
 // --- GET PRICING FOR A SPECIFIC BOOK ---
 export const getBookPricing = async (req, res) => {
@@ -991,10 +888,12 @@ export const validateExcelFile = async (req, res) => {
 
     const filePath = req.file.path;
     const originalName = path.basename(req.file.originalname, path.extname(req.file.originalname));
+    const { templateId } = req.body;
 
     logger.info('Validating Excel file mapping', {
       fileName: req.file.originalname,
-      filePath
+      filePath,
+      templateId
     });
 
     const validationResult = await validateExcelMapping(filePath);
@@ -1005,6 +904,57 @@ export const validateExcelFile = async (req, res) => {
         message: validationResult.message,
         error: validationResult.error
       });
+    }
+
+    let template = null;
+    let autoMapping = {};
+    let isTemplateMatch = false;
+    let templateMatchDetails = null;
+
+    // Handle template matching if templateId is provided
+    if (templateId) {
+      try {
+        const ImportTemplate = (await import('../models/import.template.js')).default;
+        template = await ImportTemplate.findById(templateId);
+        
+        if (template) {
+          // Binary template matching
+          const normalizedTemplate = template.expectedHeaders.map(h => h.toLowerCase().trim());
+          const normalizedFile = validationResult.headers.map(h => h.toLowerCase().trim());
+          
+          const allHeadersMatch = normalizedTemplate.every(templateHeader => 
+            normalizedFile.includes(templateHeader)
+          );
+          
+          const missingHeaders = normalizedTemplate.filter(header => 
+            !normalizedFile.includes(header)
+          );
+          
+          const extraHeaders = normalizedFile.filter(header => 
+            !normalizedTemplate.includes(header)
+          );
+          
+          templateMatchDetails = {
+            isPerfectMatch: allHeadersMatch,
+            missingHeaders,
+            extraHeaders
+          };
+          
+          if (allHeadersMatch) {
+            // Perfect match - apply template mapping
+            autoMapping = template.mapping;
+            isTemplateMatch = true;
+            
+            // Update template usage count
+            await ImportTemplate.findByIdAndUpdate(templateId, {
+              $inc: { usageCount: 1 },
+              lastUsedAt: new Date()
+            });
+          }
+        }
+      } catch (templateError) {
+        logger.warn('Error processing template:', templateError);
+      }
     }
 
     // Clean up uploaded file after validation
@@ -1021,9 +971,11 @@ export const validateExcelFile = async (req, res) => {
       data: {
         fileName: req.file.originalname,
         headers: validationResult.headers,
-        mapping: validationResult.mapping,
+        mapping: isTemplateMatch ? autoMapping : validationResult.mapping,
         unmappedHeaders: validationResult.unmappedHeaders,
         suggestedMapping: validationResult.suggestedMapping,
+        templateMatch: isTemplateMatch,
+        templateMatchDetails,
         validation: validationResult.validation
       }
     });

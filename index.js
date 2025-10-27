@@ -5,6 +5,7 @@ import router from "./routes/book.routes.js";
 import emailRouter from "./routes/email.routes.js";
 import quotationRouter from "./routes/quotation.routes.js";
 import commonRouter from "./routes/common.routes.js";
+import templateRouter from "./routes/template.routes.js";
 import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";
 import { toNodeHandler } from "better-auth/node";
@@ -52,7 +53,8 @@ app.use('/public', express.static(path.join(process.cwd(), 'public')));
 app.use('/api/books', router);
 // Use the email routes for any request to /api/emails
 app.use('/api/emails', emailRouter);
-
+// Use the template routes for any request to /api/templates
+app.use('/api/templates', templateRouter);
 // Use the quotation routes for any request to /api/quotation
 app.use('/api/quotations', quotationRouter);
 

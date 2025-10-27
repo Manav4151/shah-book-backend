@@ -7,92 +7,9 @@ import Publisher from '../models/publisher.schema.js';
  * 헬퍼 함수 (Helper Functions)
  * ----------------------------------------------------------------
  */
-
-// /**
-//  * Finds an existing book based on a specific match logic:
-//  * 1. ISBN -> Title -> Publisher
-//  * 2. Other Code -> Title -> Publisher
-//  * 3. Title only (results in a conflict if found)
-//  * @param {object} bookData - The new book data.
-//  * @param {string|null} publisherId - The MongoDB ObjectId of the publisher.
-//  * @returns {object} An object with status, message, and book details.
-//  */
-// export const findBookMatch = async (bookData, publisherId ,publisherData) => {
-//   const { isbn, other_code, title } = bookData;
-
-//   // Helper to build conflict responses
-//   const buildConflictResponse = (existingBook, newBookData, conflictFields) => ({
-//     status: 'CONFLICT',
-//     message: `Conflict detected. A book with this identifier already exists but has different details. Please verify.`,
-//     existingBook,
-//     newData: newBookData,
-//     conflictFields,
-//   });
-
-//   // 1. Check by ISBN
-//   if (isbn) {
-//     const bookByIsbn = await Book.findOne({ isbn }).populate('publisher');
-//     if (bookByIsbn) {
-//       const isTitleMatch = bookByIsbn.title.toLowerCase() === title.toLowerCase();
-//       if (isTitleMatch) {
-//         const isPublisherMatch = String(bookByIsbn.publisher?._id) === String(publisherId);
-//         console.log(isPublisherMatch);
-//         if (isPublisherMatch) {
-//           return { status: 'DUPLICATE', message: 'Exact duplicate book found by ISBN.', book: bookByIsbn };
-//         }
-//         console.log('Title matches, but publisher doesn\'t');
-//         console.log(bookByIsbn.publisher?.name);
-//         console.log(bookData.publisher_name);
-//         // Title matches, but publisher doesn't
-//         return buildConflictResponse(bookByIsbn, bookData, {
-//           publisher: { old: bookByIsbn.publisher?.name, new: publisherData.publisher_name }
-//         });
-//       }
-//       // ISBN matches, but title doesn't
-//       return buildConflictResponse(bookByIsbn, bookData, {
-//         title: { old: bookByIsbn.title, new: title }
-//       });
-//     }
-//   }
-
-//   // 2. Check by Other Code
-//   if (other_code) {
-//     const bookByOtherCode = await Book.findOne({ other_code }).populate('publisher');
-//     if (bookByOtherCode) {
-//       // Same logic as ISBN check
-//       const isTitleMatch = bookByOtherCode.title.toLowerCase() === title.toLowerCase();
-//       if (isTitleMatch) {
-//         const isPublisherMatch = String(bookByOtherCode.publisher?._id) === String(publisherId);
-//         if (isPublisherMatch) {
-//           return { status: 'DUPLICATE', message: 'Exact duplicate book found by Other Code.', book: bookByOtherCode };
-//         }
-//         return buildConflictResponse(bookByOtherCode, bookData, {
-//             publisher: { old: bookByOtherCode.publisher?.name, new: publisherData.publisher_name }
-
-//         });
-//       }
-//       return buildConflictResponse(bookByOtherCode, bookData, {
-//         title: { old: bookByOtherCode.title, new: title }
-//       });
-//     }
-//   }
-
-//   // 3. Last check: by Title
-//   const bookByTitle = await Book.findOne({ title: new RegExp(`^${title}$`, "i") }).populate('publisher');
-//   if (bookByTitle) {
-//     // If we reach here, ISBN/other_code did not match, but the title did. This is a conflict.
-//     return buildConflictResponse(bookByTitle, bookData, {
-//       identifier: {
-//         old: { isbn: bookByTitle.isbn, other_code: bookByTitle.other_code },
-//         new: { isbn: bookData.isbn, other_code: bookData.other_code }
-//       }
-//     });
-//   }
-
-//   // 4. No matches found
-//   return { status: 'NEW', message: 'No matching book found.', book: null };
-// };
-
+function escapeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
 
 /**
  * Checks the pricing status for an existing book.
@@ -146,33 +63,6 @@ import Publisher from '../models/publisher.schema.js';
 //     }
 //   };
 // };
-export const cleanIsbnInput = (isbnInput) => {
-  // 1. Handle null, undefined, or empty inputs to prevent errors.
-  if (!isbnInput) {
-    return '';
-  }
-
-  // 2. Ensure the input is a string so we can use string manipulation methods.
-  // This also safely handles cases where the ISBN is passed as a number.
-  const isbnString = String(isbnInput);
-
-  // 3. Use a regular expression to remove any character that is NOT a digit (0-9)
-  //    or the letter 'X' (which is valid as a checksum in ISBN-10).
-  //    - `[^0-9Xx]` is a negated set. It matches any character that is not in the set.
-  //    - The `g` flag ensures it replaces all occurrences, not just the first.
-  const cleaned = isbnString.replace(/[^0-9Xx]/g, '');
-
-  // 4. Convert the result to uppercase. This standardizes the checksum character
-  //    'x' to 'X', ensuring consistency.
-  return cleaned.toUpperCase();
-};
-export const isValidIsbn = (isbn) => {
-  if (!isbn) {
-    return false;
-  }
-  return isbn.length === 10 || isbn.length === 13;
-};
-
 
 /**
  * A helper function to find an existing publisher by name or return null if not found.
@@ -331,8 +221,9 @@ export const checkBookStatus = async (req, res) => {
 
     // Rule 3 & 5: Last check. Find by Title and Publisher.
     if (publisherId) {
+      const escapedTitle = escapeRegex(bookData.title);
       const bookByTitleAndPublisher = await Book.findOne({
-        title: new RegExp(`^${bookData.title}$`, "i"),
+        title: new RegExp(`^${escapedTitle}$`, "i"),
         publisher: publisherId
       }).populate('publisher');
 
@@ -446,8 +337,9 @@ export const determineBookStatus = async (bookData, pricingData, publisherData) 
 
   // Rule 3 & 5: Check by Title and Publisher
   if (publisherId) {
+    const escapedTitle = escapeRegex(bookData.title);
     const bookByTitleAndPublisher = await Book.findOne({
-      title: new RegExp(`^${bookData.title}$`, "i"),
+      title: new RegExp(`^${escapedTitle}$`, "i"),
       publisher: publisherId
     }).populate('publisher');
 
