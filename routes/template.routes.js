@@ -5,7 +5,7 @@ import { authenticate } from '../middleware/auth.middleware.js';
 const router = Router();
 
 // Apply authentication middleware to all template routes
-// router.use(authenticate);
+router.use(authenticate);
 
 router.get('/', getTemplates);
 router.post('/', createTemplate);

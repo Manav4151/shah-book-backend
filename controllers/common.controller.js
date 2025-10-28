@@ -135,7 +135,7 @@ export const getPublisherSuggestions = async (req, res) => {
         ]);
          res.json({ success: true, publishers });
     } catch (error) {
-        logger.error('Error fetching publisher suggestions:', error);
-        res.status(500).json({ success: false, message: 'Server error while fetching suggestions.' });
+        console.error('Error fetching publisher suggestions:', error);
+        res.status(500).json({ success: false, message: 'Server error while fetching suggestions.', error: error.message });
     }
 };

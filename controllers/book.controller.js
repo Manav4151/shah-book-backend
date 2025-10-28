@@ -350,7 +350,7 @@ export const createOrUpdateBook = async (req, res) => {
   const { bookData, pricingData, bookId, pricingId, status, pricingAction, publisherData } = req.body;
 
   if (!status || !bookData || !pricingData) {
-    return res.status(400).json({ message: 'Request must include action, bookData, and pricingData.' });
+    return res.status(400).json({ success: false, message: 'Request must include action, bookData, and pricingData.' });
   }
   logger.info('Publisher data:', publisherData);
 
@@ -358,7 +358,7 @@ export const createOrUpdateBook = async (req, res) => {
   if (bookData && typeof bookData.isbn === 'string') {
     bookData.isbn = cleanIsbnInput(bookData.isbn);
     if (bookData.isbn && !isValidIsbn(bookData.isbn)) {
-      return res.status(400).json({ message: 'Invalid ISBN provided.' });
+      return res.status(400).json({ success: false, message: 'Invalid ISBN provided.' });
     }
   }
 
@@ -376,6 +376,7 @@ export const createOrUpdateBook = async (req, res) => {
         const savedPricing = await newBookPricing.save();
 
         return res.status(201).json({
+          success: true,
           message: 'Book and pricing created successfully.',
           book: savedBook,
           pricing: savedPricing
@@ -384,49 +385,50 @@ export const createOrUpdateBook = async (req, res) => {
         // Cleanup orphaned book if pricing creation fails
         await Book.findByIdAndDelete(savedBook._id);
         console.error('Pricing create failed, book rolled back:', pricingError);
-        return res.status(500).json({ message: 'Pricing creation failed. Book was removed.', error: pricingError.message });
+        return res.status(500).json({ success: false, message: 'Pricing creation failed. Book was removed.', error: pricingError.message });
       }
 
     } catch (bookError) {
       console.error('Book create failed:', bookError);
-      return res.status(500).json({ message: 'Failed to create book.', error: bookError.message });
+      return res.status(500).json({ success: false, message: 'Failed to create book.', error: bookError.message });
     }
   }
 
   // --- ACTION: ADD_PRICE ---
   if (pricingAction === 'ADD_PRICE') {
-    if (!bookId) return res.status(400).json({ message: 'bookId is required to add new pricing.' });
+    if (!bookId) return res.status(400).json({ success: false, message: 'bookId is required to add new pricing.' });
     try {
       const newPricing = new BookPricing({ ...pricingData, book: bookId });
       const savedPricing = await newPricing.save();
-      return res.status(201).json({ message: 'New pricing added successfully.', data: savedPricing });
+      return res.status(201).json({ success: true, message: 'New pricing added successfully.', data: savedPricing });
     } catch (error) {
       console.error('Add pricing error:', error);
-      return res.status(500).json({ message: 'Failed to add new pricing.', error: error.message });
+      return res.status(500).json({ success: false, message: 'Failed to add new pricing.', error: error.message });
     }
   }
 
   // --- ACTION: UPDATE_EXISTING ---
   if (pricingAction === 'UPDATE_POSSIBLE' || pricingAction === 'UPDATE_PRICE') {
     if (!bookId || !pricingId) {
-      return res.status(400).json({ message: 'bookId and pricingId are required for an update.' });
+      return res.status(400).json({ success: false, message: 'bookId and pricingId are required for an update.' });
     }
     try {
       const updatedBook = await Book.findByIdAndUpdate(bookId, bookData, { new: true });
       const updatedPricing = await BookPricing.findByIdAndUpdate(pricingId, pricingData, { new: true });
 
       return res.status(200).json({
+        success: true,
         message: 'Data updated successfully.',
         book: updatedBook,
         pricing: updatedPricing
       });
     } catch (error) {
       console.error('Update error:', error);
-      return res.status(500).json({ message: 'Failed to update data.', error: error.message });
+      return res.status(500).json({ success: false, message: 'Failed to update data.', error: error.message });
     }
   }
 
-  return res.status(400).json({ message: 'Invalid action specified.' });
+  return res.status(400).json({ success: false, message: 'Invalid action specified.' });
 };
 
 // --- GET ALL BOOKS (with Pagination) ---
