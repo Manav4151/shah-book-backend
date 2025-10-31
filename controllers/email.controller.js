@@ -6,6 +6,7 @@ import { ApiResponse } from '../lib/api-response.js';
 import { AppError } from '../lib/api-error.js';
 import { logger } from '../lib/logger.js';
 import dotenv from 'dotenv';
+import { PDFParse } from 'pdf-parse';
 dotenv.config();
 
 console.log("Environment Variables:");
@@ -45,7 +46,7 @@ const transporter = createTransport({
 export const getEmails = async (req, res) => {
     try {
         logger.info('Fetching emails from IMAP server');
-        
+
         const connection = await connect(imapConfig);
         await connection.openBox('INBOX');
 
@@ -56,7 +57,7 @@ export const getEmails = async (req, res) => {
             markSeen: false,
         };
         const messages = await connection.search(searchCriteria, fetchOptions);
-        
+
         // Sort messages by UID in descending order and take the latest 20
         const recentMessages = messages.sort((a, b) => b.attributes.uid - a.attributes.uid).slice(0, 20);
 
@@ -71,7 +72,7 @@ export const getEmails = async (req, res) => {
         });
 
         connection.end();
-        
+
         logger.info(`Successfully fetched ${emails.length} emails`);
         return res.status(200).json(new ApiResponse(200, emails, "Emails fetched successfully"));
     } catch (error) {
@@ -89,7 +90,7 @@ export const getEmailById = async (req, res) => {
     try {
         const { uid } = req.params;
         logger.info(`Fetching email with UID: ${uid}`);
-        
+
         const connection = await connect(imapConfig);
         await connection.openBox('INBOX');
 
@@ -107,7 +108,7 @@ export const getEmailById = async (req, res) => {
 
         const emailBody = messages[0].parts.find(part => part.which === '').body;
         const parsedEmail = await simpleParser(emailBody);
-
+        const processedAttachments = await processEmailAttachments(parsedEmail);
         // Process attachments
         const simplifiedAttachments = parsedEmail.attachments.map(att => ({
             filename: att.filename,
@@ -123,11 +124,11 @@ export const getEmailById = async (req, res) => {
             date: parsedEmail.date,
             html: parsedEmail.html || parsedEmail.textAsHtml,
             text: parsedEmail.text,
-            attachments: simplifiedAttachments,
+            attachments: processedAttachments,
         };
 
         connection.end();
-        
+
         logger.info(`Successfully fetched email with UID: ${uid}`);
         return res.status(200).json(new ApiResponse(200, emailData, "Email fetched successfully"));
     } catch (error) {
@@ -144,7 +145,7 @@ export const getEmailById = async (req, res) => {
 export const sendEmail = async (req, res) => {
     try {
         const { to, subject, text, html } = req.body;
-        
+
         if (!to || !subject || !text) {
             return res.status(400).json(new AppError("To, Subject, and Text body are required", 400));
         }
@@ -169,7 +170,7 @@ export const sendEmail = async (req, res) => {
         }
 
         await transporter.sendMail(mailOptions);
-        
+
         logger.info(`Email sent successfully to: ${to}`);
         return res.status(200).json(new ApiResponse(200, null, "Email sent successfully"));
     } catch (error) {
@@ -178,6 +179,53 @@ export const sendEmail = async (req, res) => {
     }
 };
 
+
+/**
+ * Parses all attachments from a mail object, extracting text from PDFs.
+ * @param {object} mail - The mail object from mailparser.
+ * @returns {Promise<Array<object>>} - A promise that resolves to the array of processed attachments.
+ */
+async function processEmailAttachments(mail) {
+    const processedAttachments = [];
+
+    if (!mail.attachments) {
+        return []; // No attachments, return empty array
+    }
+
+    // Loop through all attachments concurrently
+    await Promise.all(mail.attachments.map(async (attachment) => {
+
+        let extractedText = null; // Default to null
+
+        // --- THIS IS THE CORE LOGIC ---
+        if (attachment.contentType === 'application/pdf' && attachment.content) {
+            try {
+                // pdf-parse works directly with the buffer from mailparser
+                const pdfData = Uint8Array.from(attachment.content);
+                const data = new PDFParse(pdfData);
+                extractedText = await data.getText();
+            } catch (err) {
+                console.error(`Failed to parse PDF: ${attachment.filename}`, err);
+                extractedText = `[Error: Failed to parse PDF: ${attachment.filename}]`;
+            }
+        }
+        // --- End of core logic ---
+
+        else if (attachment.contentType === 'text/plain' && attachment.content) {
+            // Also good to handle plain text files
+            extractedText = attachment.content.toString('utf8');
+        }
+
+        processedAttachments.push({
+            filename: attachment.filename,
+            contentType: attachment.contentType,
+            sizeInBytes: attachment.size,
+            extractedText: extractedText // This will be the full text or null
+        });
+    }));
+
+    return processedAttachments;
+}
 /**
  * @desc    Download email attachment
  * @route   GET /api/emails/:uid/attachments/:filename
@@ -187,7 +235,7 @@ export const downloadAttachment = async (req, res) => {
     try {
         const { uid, filename } = req.params;
         logger.info(`Downloading attachment: ${filename} from email UID: ${uid}`);
-        
+
         const connection = await connect(imapConfig);
         await connection.openBox('INBOX');
 
@@ -207,21 +255,21 @@ export const downloadAttachment = async (req, res) => {
 
         // Find the specific attachment
         const attachment = parsedEmail.attachments.find(att => att.filename === filename);
-        
+
         if (!attachment) {
             connection.end();
             return res.status(404).json(new AppError("Attachment not found", 404));
         }
 
         connection.end();
-        
+
         // Set headers for file download
         res.setHeader('Content-Type', attachment.contentType);
         res.setHeader('Content-Disposition', `attachment; filename="${attachment.filename}"`);
         res.setHeader('Content-Length', attachment.size);
-        
+
         res.send(attachment.content);
-        
+
         logger.info(`Attachment downloaded successfully: ${filename}`);
     } catch (error) {
         logger.error('Error downloading attachment:', error);
