@@ -320,10 +320,10 @@
                 const response = await fetch(FETCH_EMAIL_LIST_URL + "?userId=" + userId);
                 const data = await response.json();
 
-                if (data.messages) {
-                    statusBox.innerText = `Fetched ${data.messages.length} emails.`;
-                    emailListDiv.innerHTML = data.messages
-                        .map(m => `<div class="email-item">Message ID: <b>${m.id}</b></div>`)
+                if (data) {
+                    statusBox.innerText = `Fetched ${data.length} emails.`;
+                    emailListDiv.innerHTML = data
+                        .map(m => `<div class="email-item">Message ID: <b>${m.id}</b> From: <b>${m.from}</b> Subject: <b>${m.subject}</b> Date: <b>${m.date}</b></div>`)
                         .join('');
                 } else {
                     statusBox.innerText = data.error || "Failed to load emails.";

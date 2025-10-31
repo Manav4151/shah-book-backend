@@ -80,14 +80,38 @@ export async function listEmails(req, res) {
         });
 
         const gmail = google.gmail({ version: "v1", auth: oauth2Client });
-
+        const emailList = [];
         // Get list of messages
         const response = await gmail.users.messages.list({
             userId: "me",
             maxResults: 10 // You can increase or implement pagination
         });
+        const messages = response.data.messages || [];
+        // Step 2: Loop over message IDs and fetch details
+  for (const msg of messages) {
+    const msgDetail = await gmail.users.messages.get({
+      userId: "me",
+      id: msg.id,
+      format: "metadata", // "metadata" is faster than "full"
+      metadataHeaders: ["From", "Subject", "Date"],
+    });
 
-        res.json(response.data);
+    const headers = msgDetail.data.payload.headers;
+
+    // Extract useful fields
+    const from = headers.find(h => h.name === "From")?.value || "";
+    const subject = headers.find(h => h.name === "Subject")?.value || "";
+    const date = headers.find(h => h.name === "Date")?.value || "";
+
+    emailList.push({
+      id: msg.id,
+      threadId: msg.threadId,
+      from,
+      subject,
+      date,
+    });
+  }
+        res.json(emailList);
     } catch (error) {
         console.error("List Emails Error:", error);
         res.status(500).json({ message: "Error fetching emails", error });
