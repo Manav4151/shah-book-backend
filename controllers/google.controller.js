@@ -7,7 +7,7 @@ import gmailAuthModel from "../models/googleAuth.model.js";
  * Step 1: Generate Google OAuth URL for user to authenticate
  */
 export function getAuthUrl(req, res) {
-    const { userId } = req.query;
+    const userId = req.user?.id || 'anonymous';
 
     if (!userId) return res.status(400).json({ message: "userId is required" });
 
@@ -48,15 +48,15 @@ export async function oauthCallback(req, res) {
                 userId,
                 email: userInfo.data.email,
                 accessToken: tokens.access_token,
-                refreshToken: "IF YOU WANT TO AVOID EXPIRY, USE THIS REFRESH TOKEN",
+                refreshToken: tokens.refresh_token,
                 scope: tokens.scope,
                 tokenType: tokens.token_type,
                 expiryDate: tokens.expiry_date,
             },
             { upsert: true, new: true }
         );
-
-        res.send(`<h2>Gmail Connected Successfully!</h2><p>You can close this window.</p>`);
+        // Redirect to frontend
+        res.redirect(`http://localhost:3000/emails`);
     } catch (error) {
         console.error("OAuth Callback Error:", error);
         res.status(500).json({ message: "Authentication failed", error });
@@ -67,7 +67,7 @@ export async function oauthCallback(req, res) {
  * Step 3: Fetch list of emails
  */
 export async function listEmails(req, res) {
-    const { userId } = req.query;
+    const userId = req.user?.id || 'anonymous';
 
     try {
         const authData = await gmailAuthModel.findOne({ userId });
@@ -76,7 +76,7 @@ export async function listEmails(req, res) {
         // Set credentials from DB
         setCredentials({
             access_token: authData.accessToken,
-            // refresh_token: authData.refreshToken
+            refresh_token: authData.refreshToken
         });
 
         const gmail = google.gmail({ version: "v1", auth: oauth2Client });
@@ -88,29 +88,29 @@ export async function listEmails(req, res) {
         });
         const messages = response.data.messages || [];
         // Step 2: Loop over message IDs and fetch details
-  for (const msg of messages) {
-    const msgDetail = await gmail.users.messages.get({
-      userId: "me",
-      id: msg.id,
-      format: "metadata", // "metadata" is faster than "full"
-      metadataHeaders: ["From", "Subject", "Date"],
-    });
+        for (const msg of messages) {
+            const msgDetail = await gmail.users.messages.get({
+                userId: "me",
+                id: msg.id,
+                format: "metadata", // "metadata" is faster than "full"
+                metadataHeaders: ["From", "Subject", "Date"],
+            });
 
-    const headers = msgDetail.data.payload.headers;
+            const headers = msgDetail.data.payload.headers;
 
-    // Extract useful fields
-    const from = headers.find(h => h.name === "From")?.value || "";
-    const subject = headers.find(h => h.name === "Subject")?.value || "";
-    const date = headers.find(h => h.name === "Date")?.value || "";
+            // Extract useful fields
+            const from = headers.find(h => h.name === "From")?.value || "";
+            const subject = headers.find(h => h.name === "Subject")?.value || "";
+            const date = headers.find(h => h.name === "Date")?.value || "";
 
-    emailList.push({
-      id: msg.id,
-      threadId: msg.threadId,
-      from,
-      subject,
-      date,
-    });
-  }
+            emailList.push({
+                id: msg.id,
+                threadId: msg.threadId,
+                from,
+                subject,
+                date,
+            });
+        }
         res.json(emailList);
     } catch (error) {
         console.error("List Emails Error:", error);
@@ -122,7 +122,8 @@ export async function listEmails(req, res) {
  * Step 4: Fetch full email content by message ID
  */
 export async function getEmailContent(req, res) {
-    const { userId, messageId } = req.query;
+    const { messageId } = req.query;
+    const userId = req.user?.id || 'anonymous';
     console.log("userId", userId);
     console.log("messageId", messageId);
 
@@ -143,10 +144,7 @@ export async function getEmailContent(req, res) {
             format: "full"
         });
         const jsonMail = formatGmailMessage(response.data);
-        console.log("email in json", jsonMail);
-
-        console.log("jsonMail", jsonMail);
-        res.json(response.data);
+        res.json(jsonMail);
     } catch (error) {
         console.error("Get Email Content Error:", error);
         res.status(500).json({ message: "Error fetching email content", error });
@@ -217,5 +215,14 @@ export function formatGmailMessage(message) {
 }
 
 /* 
-https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&scope=https%3A%2F%2Fwww.googleapis.com%2Fauth%2Fgmail.readonly&response_type=code&client_id=1044696955589-gu8m541rt59honip64c5dei2ntnmqmct.apps.googleusercontent.com&redirect_uri=http%3A%2F%2Flocalhost%3A5050%2Fapi%2Fgoogle%2Foauth2callback
+i want on flow for quotation generation flow for that i have,
+one book listing page with all the books thats data come from collection (book model and fields like title, author, isbn, year, classification, publisher_name, pricingid).
+for pricing detail another schema called book_pricing with fields like book, binding_type, price, currency, source.(for single book there can be multiple pricing detail based on source).
+
+so now i want to generate quotation from that data that i have, so in listing screen i show select checkbox and button for generate quotation.
+so now what i need to do because i wnat one screen or view for display selected book for quotation and its lowest pricing from its assoiciated pricing detail. and field for enter the quantity than button for generate quotation.
+i also have quotation schema for store quotation data.
+
+so how i can manage that flow? do i need to craete helper api for display selected book and its lowest pricing from pricing detail.and than generate quotation api. for actual quotation generation. i attach schema for quotation for reference.
 */
+

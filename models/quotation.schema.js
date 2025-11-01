@@ -10,7 +10,7 @@ const quotationItemSchema = new Schema({
 
 const quotationSchema = new Schema(
     {
-        quotationId: { type: String, required: true, unique: true }, // e.g., Q-2024-001
+        quotationId: { type: String, unique: true }, // e.g., Q-2024-001
         customer: { type: Schema.Types.ObjectId, ref: 'Customer', required: true },
         items: [quotationItemSchema],
         subTotal: { type: Number, required: true },
@@ -27,18 +27,31 @@ const quotationSchema = new Schema(
 );
 
 // Auto-incrementing quotationId (optional, but good practice)
-quotationSchema.pre('save', async function (next) {
-    if (this.isNew) {
-        const lastQuotation = await this.constructor.findOne({}, {}, { sort: { 'createdAt': -1 } });
-        let newId = 'Q-2024-001';
+// ✅ Auto-generate quotationId: QT-YYYY-XXXX
+quotationSchema.pre('validate', async function (next) {
+    if (this.isNew && !this.quotationId) {
+        const now = new Date();
+        const year = now.getFullYear();
+
+        // Find last quotation in the same year
+        const prefix = `QT-${year}`;
+        const lastQuotation = await this.constructor
+            .findOne({ quotationId: { $regex: `^${prefix}-` } })
+            .sort({ createdAt: -1 })
+            .lean();
+
+        let nextNumber = 1;
         if (lastQuotation && lastQuotation.quotationId) {
-            const lastId = parseInt(lastQuotation.quotationId.split('-')[2]);
-            newId = `Q-2024-${String(lastId + 1).padStart(3, '0')}`;
+            const lastNumber = parseInt(lastQuotation.quotationId.split('-')[2]);
+            nextNumber = lastNumber + 1;
         }
-        this.quotationId = newId;
+
+        const formattedNumber = String(nextNumber).padStart(3, '0');
+        this.quotationId = `${prefix}-${formattedNumber}`;
     }
     next();
 });
+
 
 const Quotation = model('Quotation', quotationSchema);
 export default Quotation;

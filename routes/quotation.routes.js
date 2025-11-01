@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { downloadQuotationPDF, getQuotations, previewQuotationPDF } from "../controllers/quotation.controller.js";
+import { createQuotation, downloadQuotationPDF, getQuotations, previewQuotation, previewQuotationPDF } from "../controllers/quotation.controller.js";
 
 const router = Router();
 
@@ -12,4 +12,6 @@ router.route('/:id/download')
 router.route('/:id/preview')
     .get(previewQuotationPDF);
 
+router.route('/preview').post(previewQuotation);
+router.route('/create').post(createQuotation);
 export default router;
