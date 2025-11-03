@@ -43,6 +43,35 @@ export const getQuotations = async (req, res) => {
         }
     },);
 };
+
+// Get single quotation by ID
+export const getQuotationById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const quotation = await Quotation.findById(id)
+            .populate({
+                path: 'customer',
+                select: 'name customerName address email phone'
+            })
+            .populate({
+                path: 'items.book',
+                select: 'title isbn author publisher edition'
+            });
+
+        if (!quotation) {
+            return res.status(404).json({ success: false, message: 'Quotation not found' });
+        }
+
+        res.status(200).json({
+            success: true,
+            message: "Quotation fetched successfully",
+            quotation
+        });
+    } catch (error) {
+        logger.error('Error fetching quotation by ID:', error);
+        res.status(500).json({ success: false, message: 'Server error while fetching quotation.' });
+    }
+};
 // quitation preview api
 export const previewQuotation = async (req, res) => {
     try {
@@ -205,6 +234,10 @@ export const previewQuotationPDF = async (req, res) => {
 const fetchQuotationData = async (id) => {
     // This function can still throw an error, which will be caught by the controllers above.
     const quotation = await Quotation.findById(id)
+        .populate({ 
+            path: 'customer',
+            select: 'name customerName address email phone'
+        })
         .populate({ path: 'items.book', select: 'title isbn' });
     return quotation;
 };
@@ -235,13 +268,14 @@ function generateCustomerInformation(doc, quotation) {
     doc.fillColor('#444444').fontSize(20).text('Quotation', 50, 160);
     generateHr(doc, 185);
     const customerInfoTop = 200;
+    const customerName = quotation.customer?.customerName || quotation.customer?.name || 'N/A';
     doc.fontSize(10)
         .text('Quotation ID:', 50, customerInfoTop).font('Helvetica-Bold').text(quotation.quotationId, 150, customerInfoTop)
         .font('Helvetica').text('Issue Date:', 50, customerInfoTop + 15).text(new Date(quotation.createdAt).toLocaleDateString(), 150, customerInfoTop + 15)
         .text('Valid Until:', 50, customerInfoTop + 30).text(new Date(quotation.validUntil).toLocaleDateString(), 150, customerInfoTop + 30)
-        .font('Helvetica-Bold').text(quotation.customer.customerName, 300, customerInfoTop)
-        .font('Helvetica').text(quotation.customer.address?.street || '', 300, customerInfoTop + 15)
-        .text(`${quotation.customer.address?.city || ''}, ${quotation.customer.address?.state || ''}`, 300, customerInfoTop + 30)
+        .font('Helvetica-Bold').text(customerName, 300, customerInfoTop)
+        .font('Helvetica').text(quotation.customer?.address?.street || '', 300, customerInfoTop + 15)
+        .text(`${quotation.customer?.address?.city || ''}, ${quotation.customer?.address?.state || ''}`, 300, customerInfoTop + 30)
         .moveDown();
     generateHr(doc, 252);
 }
