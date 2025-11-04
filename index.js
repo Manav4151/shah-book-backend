@@ -7,6 +7,7 @@ import quotationRouter from "./routes/quotation.routes.js";
 import commonRouter from "./routes/common.routes.js";
 import templateRouter from "./routes/template.routes.js";
 import googleRoutes from "./routes/google.routes.js";
+import newEmailRouter from "./routes/new.eamil.routes.js";
 import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";
 import { toNodeHandler } from "better-auth/node";
@@ -17,6 +18,7 @@ const PORT = process.env.PORT || 8000;
 // --- Middleware ---
 // Enable Cross-Origin Resource Sharing to allow requests from your frontend
 app.use(cors({
+  // origin: "*",
   origin: ["http://localhost:3000", "http://localhost:800", "http://127.0.0.1:5500", "http://localhost:5500", "http://127.0.0.1:8000", "http://127.0.0.1:300"],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -52,6 +54,8 @@ app.use('/api/templates', templateRouter);
 app.use('/api/quotations', quotationRouter);
 // google api routes
 app.use("/api/google", googleRoutes);
+// new email flow routes
+app.use('/api/new-email', newEmailRouter);
 // customer routes
 app.use('/api', commonRouter);
 // Debug middleware to log all requests

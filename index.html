@@ -260,7 +260,8 @@
 
     <button id="connectBtn">🔗 Connect Gmail Account</button>
     <button id="fetchBtn">📩 Fetch Email List</button>
-
+    <button id="syncBtn">🔄 Sync (Refresh Emails)</button>
+  <button id="listBtn">📬 Load Email List</button>
     <h3>✅ Status:</h3>
     <pre id="statusBox">Waiting for action...</pre>
 
@@ -274,9 +275,220 @@
         const CONNECT_URL = BACKEND_BASE_URL + "/api/google/auth-url"; // Your backend should generate OAuth URL
         const FETCH_EMAIL_LIST_URL = BACKEND_BASE_URL + "/api/google/emails";
         const FETCH_EMAIL_CONTENT_URL = BACKEND_BASE_URL + "/api/google/email";
+        const SYNC_EMAILS_URL = BACKEND_BASE_URL + "/api/new-email/sync";
+      const LIST_EMAILS_URL = BACKEND_BASE_URL + "/api/new-email/list";
+      const EMAIL_DETAIL_URL = BACKEND_BASE_URL + "/api/new-email/detail";
 
         const connectBtn = document.getElementById('connectBtn');
         const fetchBtn = document.getElementById('fetchBtn');
+        const userIdInput = document.getElementById('userId');
+        const statusBox = document.getElementById('statusBox');
+        const emailListDiv = document.getElementById('emailList');
+        const emailContentDiv = document.getElementById('emailContent');
+          const syncBtn = document.getElementById('syncBtn');
+        const listBtn = document.getElementById('listBtn');
+        // Step 1: Connect Gmail (OAuth Redirect)
+        connectBtn.onclick = async () => {
+            const userId = userIdInput.value.trim();
+            if (!userId) {
+                alert("Please enter a valid userId first!");
+                return;
+            }
+
+            statusBox.innerText = "Generating OAuth URL...";
+
+            try {
+                const response = await fetch(CONNECT_URL + "?userId=" + userId);
+                const data = await response.json();
+                if (data.url) {
+                    statusBox.innerText = "Redirecting to Google OAuth...";
+                    window.location.href = data.url; // Open OAuth
+                } else {
+                    statusBox.innerText = "Error: OAuth URL not received.";
+                }
+            } catch (err) {
+                statusBox.innerText = "Error: " + err.message;
+            }
+        };
+
+        // Step 2: Fetch Emails
+        fetchBtn.onclick = async () => {
+            const userId = userIdInput.value.trim();
+            if (!userId) {
+                alert("Please enter a valid userId first!");
+                return;
+            }
+
+            statusBox.innerText = "Fetching emails...";
+
+            try {
+                const response = await fetch(FETCH_EMAIL_LIST_URL + "?userId=" + userId);
+                const data = await response.json();
+
+                if (data) {
+                    statusBox.innerText = `Fetched ${data.length} emails.`;
+                    emailListDiv.innerHTML = data
+                        .map(m => `<div class="email-item">Message ID: <b>${m.id}</b> From: <b>${m.from}</b> Subject: <b>${m.subject}</b> Date: <b>${m.date}</b></div>`)
+                        .join('');
+                } else {
+                    statusBox.innerText = data.error || "Failed to load emails.";
+                }
+            } catch (err) {
+                statusBox.innerText = "Error: " + err.message;
+            }
+        };
+        // 🔄 Step 2: Sync Emails from Gmail API to DB
+        syncBtn.onclick = async () => {
+            const userId = userIdInput.value.trim();
+            if (!userId) return alert("Enter a valid userId first!");
+            statusBox.innerText = "Syncing emails from Gmail...";
+
+            try {
+                const res = await fetch(SYNC_EMAILS_URL + "?userId=" + userId);
+                const data = await res.json();
+                statusBox.innerText = `✅ ${data.message} (Synced ${data.count} emails)`;
+            } catch (err) {
+                statusBox.innerText = "❌ Sync Error: " + err.message;
+            }
+        };
+
+        // 📬 Step 3: Fetch Email List from DB
+        listBtn.onclick = async () => {
+            const userId = userIdInput.value.trim();
+            if (!userId) return alert("Enter a valid userId first!");
+            statusBox.innerText = "Fetching emails from DB...";
+
+            try {
+                const res = await fetch(LIST_EMAILS_URL + "?userId=" + userId);
+                const data = await res.json();
+
+                if (!Array.isArray(data) || data.length === 0) {
+                    emailListDiv.innerHTML = "<p>No emails found.</p>";
+                    statusBox.innerText = "No emails found in DB.";
+                    return;
+                }
+
+                statusBox.innerText = `Loaded ${data.length} emails from DB.`;
+                emailListDiv.innerHTML = data.map(m => `
+                    <div class="email-item" data-id="${m.messageId}">
+                        <b>From:</b> ${m.from.email} <br>
+                        <b>Subject:</b> ${m.subject} <br>
+                        <b>Date:</b> ${new Date(m.date).toLocaleString()} <br>
+                        <small>Message ID: ${m.messageId}</small>
+                    </div>
+                `).join('');
+            } catch (err) {
+                statusBox.innerText = "Error loading list: " + err.message;
+            }
+        };     // --- Step 3: Fetch Email Content ---
+        emailListDiv.addEventListener("click", async (e) => {
+            const item = e.target.closest(".email-item");
+            if (!item) return;
+            const userId = userIdInput.value.trim();
+            const messageId = item.getAttribute("data-id");
+            statusBox.innerText = `Fetching email content for ${messageId}...`;
+
+            try {
+                const response = await fetch(`${FETCH_EMAIL_CONTENT_URL}?userId=${userId}&messageId=19a342d4787ff0de`);
+                const data = await response.json();
+
+                if (data && data.snippet) {
+                    emailContentDiv.innerHTML = `
+                        <h3>📩 Email Content:</h3>
+                        <p><b>Snippet:</b> ${data.snippet}</p>
+                        <pre>${JSON.stringify(data, null, 2)}</pre>
+                    `;
+                    statusBox.innerText = "Email content loaded successfully!";
+                } else {
+                    emailContentDiv.innerHTML = `<p style="color:red;">Failed to load content.</p>`;
+                    statusBox.innerText = "Error loading email content.";
+                }
+            } catch (err) {
+                emailContentDiv.innerHTML = `<p style="color:red;">Error: ${err.message}</p>`;
+                statusBox.innerText = "Error fetching email content.";
+            }
+        });
+        // Auto Enable Fetch Button if redirected back after OAuth
+        window.onload = () => {
+            const urlParams = new URLSearchParams(window.location.search);
+            if (urlParams.has("authSuccess")) {
+                fetchBtn.disabled = false;
+                statusBox.innerText = "✅ Gmail Connected! Now you can fetch emails.";
+            }
+        };
+    </script>
+</body>
+
+</html>
+
+
+
+<!-- <!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <link rel="shortcut icon" href="#">
+    <meta charset="UTF-8" />
+    <title>Gmail Integration Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+        }
+
+        button {
+            padding: 10px 20px;
+            margin-top: 10px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        #emails {
+            margin-top: 20px;
+        }
+
+        .email-item {
+            padding: 10px;
+            border-bottom: 1px solid #ccc;
+        }
+
+        .email-item:hover {
+            background-color: #f9f9f9;
+        }
+    </style>
+</head>
+
+<body>
+    <h2>📧 Gmail Integration Test Page</h2>
+    <p>Test OAuth + Fetch Email List directly in browser without frontend integration.</p>
+
+    <label>User ID (from your database):</label><br>
+    <input id="userId" placeholder="e.g. 68ff013b7949e3936d838f26" style="width: 350px; padding: 6px;"><br><br>
+
+    <button id="connectBtn">🔗 Connect Gmail Account</button>
+    <button id="fetchBtn">📩 Fetch Email List</button>
+      <button id="syncBtn">🔄 Sync (Refresh Emails)</button>
+  <button id="listBtn">📬 Load Email List</button>
+    <h3>✅ Status:</h3>
+    <pre id="statusBox">Waiting for action...</pre>
+
+    <div id="emails">
+        <h3>📬 Emails List:</h3>
+        <div id="emailList"></div>
+    </div>
+    <div id="emailContent"></div>
+    <script>
+        const BACKEND_BASE_URL = "http://localhost:5050"; // Change if your backend is hosted
+        const CONNECT_URL = BACKEND_BASE_URL + "/api/google/auth-url"; // Your backend should generate OAuth URL
+        const SYNC_EMAILS_URL = BACKEND_BASE_URL + "/api/new-email/sync";
+      const LIST_EMAILS_URL = BACKEND_BASE_URL + "/api/email/list";
+      const EMAIL_DETAIL_URL = BACKEND_BASE_URL + "/api/email/detail";
+
+
+        const connectBtn = document.getElementById('connectBtn');
+        const fetchBtn = document.getElementById('fetchBtn');
+        const syncBtn = document.getElementById('syncBtn');
+        const listBtn = document.getElementById('listBtn');
         const userIdInput = document.getElementById('userId');
         const statusBox = document.getElementById('statusBox');
         const emailListDiv = document.getElementById('emailList');
@@ -332,6 +544,51 @@
                 statusBox.innerText = "Error: " + err.message;
             }
         };
+        // 🔄 Sync Emails
+      syncBtn.addEventListener("click", async () => {
+        const userId = userIdInput.value.trim();
+        if (!userId) return alert("Enter a valid userId first!");
+
+        statusBox.innerText = "Syncing emails...";
+        try {
+          const data = await safeFetch(`${SYNC_EMAILS_URL}?userId=${userId}`);
+          console.log("🔄 Sync result:", data);
+          statusBox.innerText = `✅ ${data.message || 'Synced!'} (${data.count || 0} emails)`;
+        } catch (err) {
+          statusBox.innerText = "❌ Sync Error: " + err.message;
+        }
+      });
+
+      // 📬 List Emails
+      listBtn.addEventListener("click", async () => {
+        const userId = userIdInput.value.trim();
+        if (!userId) return alert("Enter a valid userId first!");
+
+        statusBox.innerText = "Fetching email list...";
+        try {
+          const data = await safeFetch(`${LIST_EMAILS_URL}?userId=${userId}`);
+          console.log("📬 List result:", data);
+
+          if (!Array.isArray(data) || data.length === 0) {
+            emailListDiv.innerHTML = "<p>No emails found.</p>";
+            statusBox.innerText = "No emails in DB.";
+            return;
+          }
+
+          emailListDiv.innerHTML = data.map(m => `
+            <div class="email-item" data-id="${m.messageId}">
+              <b>From:</b> ${m.from?.email || m.from} <br>
+              <b>Subject:</b> ${m.subject || '(No Subject)'} <br>
+              <b>Date:</b> ${new Date(m.date).toLocaleString()} <br>
+              <small>ID: ${m.messageId}</small>
+            </div>
+          `).join('');
+
+          statusBox.innerText = `✅ Loaded ${data.length} emails.`;
+        } catch (err) {
+          statusBox.innerText = "❌ Error loading emails: " + err.message;
+        }
+      });
         // --- Step 3: Fetch Email Content ---
         emailListDiv.addEventListener("click", async (e) => {
             const item = e.target.closest(".email-item");
@@ -371,4 +628,4 @@
     </script>
 </body>
 
-</html>
+</html> -->

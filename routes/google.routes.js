@@ -4,7 +4,7 @@ import { getAuthUrl, oauthCallback, listEmails, getEmailContent } from "../contr
 import { authenticate } from "../middleware/auth.middleware.js";
 
 // Apply authentication middleware to all template routes
-router.use(authenticate);
+// router.use(authenticate);
 // Redirect user to Google OAuth
 router.get("/auth-url", getAuthUrl);
 
