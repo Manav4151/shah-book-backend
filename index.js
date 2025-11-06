@@ -8,6 +8,7 @@ import commonRouter from "./routes/common.routes.js";
 import templateRouter from "./routes/template.routes.js";
 import googleRoutes from "./routes/google.routes.js";
 import newEmailRouter from "./routes/new.eamil.routes.js";
+import companyProfileRouter from "./routes/company.profile.routes.js";
 import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";
 import { toNodeHandler } from "better-auth/node";
@@ -52,6 +53,8 @@ app.use('/api/emails', emailRouter);
 app.use('/api/templates', templateRouter);
 // Use the quotation routes for any request to /api/quotation
 app.use('/api/quotations', quotationRouter);
+// Use the company profile routes for any request to /api/company-profiles
+app.use('/api/company-profiles', companyProfileRouter);
 // google api routes
 app.use("/api/google", googleRoutes);
 // new email flow routes

@@ -5,6 +5,7 @@ import Book from "../models/book.schema.js";
 import BookPricing from "../models/BookPricing.js";
 import Publisher from "../models/publisher.schema.js";
 import Customer from "../models/customer.schema.js";
+import CompanyProfile from "../models/company.profile.schema.js";
 
 export const getQuotations = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
@@ -209,16 +210,22 @@ export const downloadQuotationPDF = async (req, res) => {
 export const previewQuotationPDF = async (req, res) => {
     try {
         const { id } = req.params;
-        const quotation = await fetchQuotationData(id);
-
+        // Fetch both pieces of data in parallel
+        const { profileId } = req.query; // Get profileId from query
+        const [quotation, companyProfile] = await Promise.all([
+            fetchQuotationData(id),
+            CompanyProfile.findById(profileId)
+        ]);
         if (!quotation) {
             return res.status(404).json({ success: false, message: 'Quotation not found' });
         }
-
+        if (!companyProfile) {
+            return res.status(404).json({ success: false, message: 'Company profile not found' });
+        }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `inline; filename="quotation-${quotation.quotationId}.pdf"`);
 
-        buildAndStreamPdf(res, quotation);
+        buildAndStreamPdf(res, quotation, companyProfile);
 
     } catch (error) {
         logger.error('Error generating PDF preview:', error);
@@ -242,11 +249,11 @@ const fetchQuotationData = async (id) => {
     return quotation;
 };
 
-function buildAndStreamPdf(res, quotation) {
+function buildAndStreamPdf(res, quotation, companyProfile) {
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
     doc.pipe(res);
 
-    generateHeader(doc);
+    generateHeader(doc, companyProfile);
     generateCustomerInformation(doc, quotation);
     generateQuotationTable(doc, quotation);
     generateFooter(doc);
@@ -257,10 +264,16 @@ function buildAndStreamPdf(res, quotation) {
 // --- PDF Generation Helper Functions ---
 // (These helper functions remain exactly the same as before)
 
-function generateHeader(doc) {
-    doc.fillColor('#444444').fontSize(20).text('Your Company Name', 50, 57)
-        .fontSize(10).text('123 Main Street', 200, 65, { align: 'right' })
-        .text('City, State, 12345', 200, 80, { align: 'right' })
+function generateHeader(doc, profile) {
+    const addressLine1 = profile.address?.street || '';
+    const addressLine2 = `${profile.address?.city || ''}, ${profile.address?.state || ''} ${profile.address?.zipCode || ''}`.trim();
+
+    doc.fillColor('#444444')
+        .fontSize(20)
+        .text(profile.companyName, 50, 57) // Dynamic Company Name
+        .fontSize(10)
+        .text(addressLine1, 200, 65, { align: 'right' }) // Dynamic Address
+        .text(addressLine2, 200, 80, { align: 'right' }) // Dynamic Address
         .moveDown();
 }
 
