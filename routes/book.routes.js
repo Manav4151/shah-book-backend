@@ -2,7 +2,7 @@ import { Router } from 'express';
 const router = Router();
 // import { createBook, getAllBooks, getBookById, updateBook, deleteBook, bulkImportBooks } from '../controllers/book.controller.js';
 import uploadMiddleware from '../middleware/upload.middleware.js';
-import { createOrUpdateBook, deleteBook, deleteBookPricing, deleteMultipleBooks, getBookPricing, getBooks, updateBook, validateExcelFile, bulkImportExcelFile, getBookSuggestions, markAsOutofPrint } from '../controllers/book.controller.js';
+import { createOrUpdateBook, deleteBook, deleteBookPricing, deleteMultipleBooks, getBookPricing, getBooks, updateBook, validateExcelFile, bulkImportExcelFile, getBookSuggestions, markAsOutofPrint, getBookDetails } from '../controllers/book.controller.js';
 import { checkBookStatus } from '../controllers/duplicate.controller.js';
 
 // Chained route for getting all books and creating a new book
@@ -23,6 +23,7 @@ router.post('/', createOrUpdateBook);
 //   .delete(deleteBook);
 
 router.get('/', getBooks); // GET /api/books
+router.get('/:bookId/details', getBookDetails);
 router.get('/:bookId/pricing', getBookPricing);
 router.put('/:bookId/outOfPrint', markAsOutofPrint);
 // Update route

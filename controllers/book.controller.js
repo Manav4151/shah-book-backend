@@ -555,9 +555,29 @@ export const getBooks = async (req, res) => {
     });
   }
 };
-
 // --- GET PRICING FOR A SPECIFIC BOOK ---
 export const getBookPricing = async (req, res) => {
+  const { bookId } = req.params;
+  if (!mongoose.Types.ObjectId.isValid(bookId)) {
+    return res.status(400).json({
+      success: false,
+      message: 'Invalid book ID format.'
+    });
+  }
+  try {
+    const pricing = await BookPricing.find({ book: bookId });
+    res.status(200).json({ success: true, pricing: pricing, message: 'Book pricing fetched successfully.' });
+  } catch (error) {
+    console.error('Error fetching book pricing:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error while fetching book pricing.',
+      error: error.message
+    });
+  }
+};
+// --- GET BOOK DETAILS ---
+export const getBookDetails = async (req, res) => {
   const { bookId } = req.params;
 
   if (!mongoose.Types.ObjectId.isValid(bookId)) {
