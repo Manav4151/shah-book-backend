@@ -68,7 +68,15 @@ export async function oauthCallback(req, res) {
  */
 export async function listEmails(req, res) {
     const userId = req.user?.id || 'anonymous';
+    const { search, from, status, newer_than } = req.query;
 
+// Build the search query
+let queryParts = [];
+if (search) queryParts.push(search);       // General search term
+if (from) queryParts.push(`from:${from}`); // e.g., from=saarang
+if (status) queryParts.push(`is:${status}`); // e.g., status=unread
+if (newer_than) queryParts.push(`newer_than:${newer_than}`); // e.g., newer_than=7d
+const searchQuery = queryParts.join(' '); // Combine all parts with a space
     try {
         const authData = await gmailAuthModel.findOne({ userId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
@@ -84,7 +92,8 @@ export async function listEmails(req, res) {
         // Get list of messages
         const response = await gmail.users.messages.list({
             userId: "me",
-            maxResults: 10 // You can increase or implement pagination
+            maxResults: 10, // You can increase or implement pagination
+            q: searchQuery,
         });
         const messages = response.data.messages || [];
         // Step 2: Loop over message IDs and fetch details
