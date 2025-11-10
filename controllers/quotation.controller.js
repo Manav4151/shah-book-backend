@@ -174,6 +174,79 @@ export const createQuotation = async (req, res) => {
     }
 };
 
+/**
+ * Update an existing quotation
+ * Expected payload (all fields optional except those you want to update):
+ * {
+ *   customer: "<customerId>",
+ *   items: [
+ *     { book: "<bookId>", quantity: 1, unitPrice: 100, discount: 5, totalPrice: 95 }
+ *   ],
+ *   subTotal: 100,
+ *   totalDiscount: 5,
+ *   grandTotal: 95,
+ *   status: "Draft",
+ *   validUntil: "2024-12-31T00:00:00.000Z"
+ * }
+ */
+export const updateQuotation = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { customer, items, subTotal, totalDiscount, grandTotal, status, validUntil } = req.body;
+
+        // Find the quotation
+        const quotation = await Quotation.findById(id);
+        if (!quotation) {
+            return res.status(404).json({ success: false, message: 'Quotation not found' });
+        }
+
+        // Prevent editing quotations that are already Accepted or Rejected
+        if (quotation.status === 'Accepted' || quotation.status === 'Rejected') {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Cannot edit quotations that are already Accepted or Rejected' 
+            });
+        }
+
+        // Update fields if provided
+        if (customer) quotation.customer = customer;
+        if (items && items.length > 0) quotation.items = items;
+        if (subTotal !== undefined) quotation.subTotal = subTotal;
+        if (totalDiscount !== undefined) quotation.totalDiscount = totalDiscount;
+        if (grandTotal !== undefined) quotation.grandTotal = grandTotal;
+        if (status) quotation.status = status;
+        if (validUntil) quotation.validUntil = validUntil;
+
+        // Validate that we have at least one item if items are being updated
+        if (items && items.length === 0) {
+            return res.status(400).json({ success: false, message: 'At least one item is required.' });
+        }
+
+        // Save the updated quotation
+        await quotation.save();
+
+        // Populate the response
+        const updatedQuotation = await Quotation.findById(id)
+            .populate({
+                path: 'customer',
+                select: 'name customerName address email phone'
+            })
+            .populate({
+                path: 'items.book',
+                select: 'title isbn author publisher edition'
+            });
+
+        return res.status(200).json({
+            success: true,
+            message: 'Quotation updated successfully',
+            quotation: updatedQuotation,
+        });
+    } catch (error) {
+        console.error('Error updating quotation:', error);
+        res.status(500).json({ success: false, message: 'Internal Server Error', error: error.message });
+    }
+};
+
 // quotation pdf download and preview
 /**
  * @desc    Generate and stream a quotation PDF for direct download
@@ -182,17 +255,24 @@ export const createQuotation = async (req, res) => {
 export const downloadQuotationPDF = async (req, res) => {
     try {
         const { id } = req.params;
-        const quotation = await fetchQuotationData(id);
-
+       
+        // Fetch both pieces of data in parallel
+        const { profileId } = req.query; // Get profileId from query
+        const [quotation, companyProfile] = await Promise.all([
+            fetchQuotationData(id),
+            CompanyProfile.findById(profileId)
+        ]);
         // Manually check if data was found
         if (!quotation) {
             return res.status(404).json({ success: false, message: 'Quotation not found' });
         }
-
+        if (!companyProfile) {
+            return res.status(404).json({ success: false, message: 'Company profile not found' });
+        }
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename="quotation-${quotation.quotationId}.pdf"`);
 
-        buildAndStreamPdf(res, quotation);
+        buildAndStreamPdf(res, quotation, companyProfile);
 
     } catch (error) {
         // Manually log and send a server error response

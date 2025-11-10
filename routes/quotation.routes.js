@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { createQuotation, downloadQuotationPDF, getQuotationById, getQuotations, previewQuotation, previewQuotationPDF } from "../controllers/quotation.controller.js";
+import { createQuotation, downloadQuotationPDF, getQuotationById, getQuotations, previewQuotation, previewQuotationPDF, updateQuotation } from "../controllers/quotation.controller.js";
 
 const router = Router();
 
@@ -15,6 +15,9 @@ router.route('/:id/download')
 
 router.route('/:id/preview')
     .get(previewQuotationPDF);
+
+// Update quotation (must be before get by id to avoid conflicts)
+router.put('/:id', updateQuotation);
 
 // Get single quotation by ID (must be last to avoid conflicts with /preview and /create)
 router.get('/:id', getQuotationById);
