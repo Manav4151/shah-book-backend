@@ -153,6 +153,39 @@ export async function getEmailContent(req, res) {
             format: "full"
         });
         const jsonMail = formatGmailMessage(response.data);
+
+        // Always include attachment data if attachments exist - avoids separate API calls
+        if (Array.isArray(jsonMail.attachments) && jsonMail.attachments.length > 0) {
+            // Fetch attachment data in parallel
+            const hydrated = await Promise.all(jsonMail.attachments.map(async (att) => {
+                try {
+                    if (!att.attachmentId) {
+                        return { ...att, dataUrl: null };
+                    }
+
+                    const attResp = await gmail.users.messages.attachments.get({
+                        userId: "me",
+                        messageId,
+                        id: att.attachmentId
+                    });
+                    const raw = attResp.data?.data;
+                    if (!raw) {
+                        return { ...att, dataUrl: null };
+                    }
+                    // Gmail returns URL-safe base64
+                    const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+                    // Return as data URL for easy inline preview on the client
+                    const dataUrl = `data:${att.mimeType || 'application/octet-stream'};base64,${b64}`;
+                    return { ...att, dataUrl };
+                } catch (e) {
+                    console.error('Failed to fetch attachment data', att.filename, e);
+                    return { ...att, dataUrl: null };
+                }
+            }));
+
+            jsonMail.attachments = hydrated;
+        }
+
         res.json(jsonMail);
     } catch (error) {
         console.error("Get Email Content Error:", error);
@@ -221,6 +254,96 @@ export function formatGmailMessage(message) {
         dateOfMessage: date,
         attachments,
     };
+}
+
+/**
+ * Download email attachment using Gmail API
+ * @route GET /api/google/emails/:messageId/attachments/:filename
+ */
+export async function downloadGoogleEmailAttachment(req, res) {
+    const { messageId, filename } = req.params;
+    const userId = req.user?.id || 'anonymous';
+
+    try {
+        const authData = await gmailAuthModel.findOne({ userId });
+        if (!authData) {
+            return res.status(401).json({ message: "Gmail not connected" });
+        }
+
+        setCredentials({
+            access_token: authData.accessToken,
+            refresh_token: authData.refreshToken
+        });
+
+        const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+        // First, get the message to find the attachment
+        const messageResponse = await gmail.users.messages.get({
+            userId: "me",
+            id: messageId,
+            format: "full"
+        });
+
+        const message = messageResponse.data;
+        if (!message || !message.payload) {
+            return res.status(404).json({ message: "Email not found" });
+        }
+
+        // Find the attachment by filename
+        let attachmentId = null;
+        let attachmentMimeType = null;
+
+        function findAttachment(part) {
+            if (part.filename && part.body?.attachmentId) {
+                // Decode filename to handle URL encoding
+                const decodedFilename = decodeURIComponent(filename);
+                if (part.filename === filename || part.filename === decodedFilename || 
+                    part.filename.includes(decodedFilename) || decodedFilename.includes(part.filename)) {
+                    attachmentId = part.body.attachmentId;
+                    attachmentMimeType = part.mimeType;
+                    return;
+                }
+            }
+            if (part.parts) {
+                part.parts.forEach(findAttachment);
+            }
+        }
+
+        findAttachment(message.payload);
+
+        if (!attachmentId) {
+            return res.status(404).json({ message: "Attachment not found" });
+        }
+
+        // Download the attachment
+        const attachmentResponse = await gmail.users.messages.attachments.get({
+            userId: "me",
+            messageId: messageId,
+            id: attachmentId
+        });
+
+        // Decode base64 attachment data
+        const attachmentData = attachmentResponse.data.data;
+        const data = attachmentData.replace(/-/g, "+").replace(/_/g, "/");
+        const buffer = Buffer.from(data, "base64");
+
+        // Set proper headers
+        const contentType = attachmentMimeType || 'application/octet-stream';
+        const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+        
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        res.setHeader('Content-Length', buffer.length);
+        res.setHeader('Cache-Control', 'no-cache');
+
+        // Send the buffer
+        res.send(buffer);
+
+        console.log(`Attachment downloaded successfully: ${filename} (${buffer.length} bytes)`);
+    } catch (error) {
+        console.error('Error downloading Google email attachment:', error);
+        res.status(500).json({ message: "Error downloading attachment", error: error.message });
+    }
 }
 
 /* 

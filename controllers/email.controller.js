@@ -232,11 +232,14 @@ async function processEmailAttachments(mail) {
  * @access  Private
  */
 export const downloadAttachment = async (req, res) => {
+    let connection = null;
     try {
         const { uid, filename } = req.params;
-        logger.info(`Downloading attachment: ${filename} from email UID: ${uid}`);
+        // Decode the filename in case it's URL encoded
+        const decodedFilename = decodeURIComponent(filename);
+        logger.info(`Downloading attachment: ${decodedFilename} from email UID: ${uid}`);
 
-        const connection = await connect(imapConfig);
+        connection = await connect(imapConfig);
         await connection.openBox('INBOX');
 
         const fetchOptions = {
@@ -253,26 +256,65 @@ export const downloadAttachment = async (req, res) => {
         const emailBody = messages[0].parts.find(part => part.which === '').body;
         const parsedEmail = await simpleParser(emailBody);
 
-        // Find the specific attachment
-        const attachment = parsedEmail.attachments.find(att => att.filename === filename);
+        // Find the specific attachment - try both original and decoded filename
+        let attachment = parsedEmail.attachments.find(att => att.filename === decodedFilename);
+        if (!attachment) {
+            // Try with original filename in case decoding wasn't needed
+            attachment = parsedEmail.attachments.find(att => att.filename === filename);
+        }
+        // Also try matching by filename without path/encoding issues
+        if (!attachment) {
+            attachment = parsedEmail.attachments.find(att => 
+                att.filename === decodedFilename || 
+                att.filename.includes(decodedFilename) ||
+                decodedFilename.includes(att.filename)
+            );
+        }
 
         if (!attachment) {
             connection.end();
+            logger.warn(`Attachment not found: ${decodedFilename}. Available attachments: ${parsedEmail.attachments.map(a => a.filename).join(', ')}`);
             return res.status(404).json(new AppError("Attachment not found", 404));
         }
 
         connection.end();
+        connection = null;
 
-        // Set headers for file download
-        res.setHeader('Content-Type', attachment.contentType);
-        res.setHeader('Content-Disposition', `attachment; filename="${attachment.filename}"`);
-        res.setHeader('Content-Length', attachment.size);
+        // Ensure content is a Buffer
+        let contentBuffer;
+        if (Buffer.isBuffer(attachment.content)) {
+            contentBuffer = attachment.content;
+        } else if (attachment.content instanceof Uint8Array) {
+            contentBuffer = Buffer.from(attachment.content);
+        } else if (Array.isArray(attachment.content)) {
+            contentBuffer = Buffer.from(attachment.content);
+        } else {
+            // Try to convert to buffer
+            contentBuffer = Buffer.from(attachment.content);
+        }
 
-        res.send(attachment.content);
+        // Set proper headers for file download
+        const contentType = attachment.contentType || 'application/octet-stream';
+        const safeFilename = attachment.filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+        
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(attachment.filename)}`);
+        res.setHeader('Content-Length', contentBuffer.length);
+        res.setHeader('Cache-Control', 'no-cache');
 
-        logger.info(`Attachment downloaded successfully: ${filename}`);
+        // Send the buffer
+        res.send(contentBuffer);
+
+        logger.info(`Attachment downloaded successfully: ${attachment.filename} (${contentBuffer.length} bytes)`);
     } catch (error) {
         logger.error('Error downloading attachment:', error);
+        if (connection) {
+            try {
+                connection.end();
+            } catch (e) {
+                // Ignore connection close errors
+            }
+        }
         return res.status(500).json(new AppError("Error downloading attachment", 500, error.message));
     }
 };
