@@ -7,7 +7,16 @@ const quotationItemSchema = new Schema({
     discount: { type: Number, default: 0 }, // Discount percentage
     totalPrice: { type: Number, required: true },
 });
+// 📨 Embedded Email Info Schema
+const emailInfoSchema = new Schema({
+    messageId: { type: String, required: true }, // Gmail message ID
+    sender: { type: String, required: true },    // e.g., user@gmail.com
+    subject: { type: String, required: true },   // Email subject
+    receivedAt: { type: Date, required: true },  // When email received
+    snippet: { type: String },                   // Optional short preview
+}, { _id: false });
 
+// 📦 Quotation Schema
 const quotationSchema = new Schema(
     {
         quotationId: { type: String, unique: true }, // e.g., Q-2024-001
@@ -22,6 +31,8 @@ const quotationSchema = new Schema(
             default: 'Draft',
         },
         validUntil: { type: Date },
+        // 📨 Add Email Metadata here
+        emailInfo: { type: emailInfoSchema, required: false },
     },
     { timestamps: true }
 );

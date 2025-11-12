@@ -124,12 +124,19 @@ export const previewQuotation = async (req, res) => {
  *   totalDiscount: 5,
  *   grandTotal: 95,
  *   status: "Draft",
- *   validUntil: "2024-12-31T00:00:00.000Z"
+ *   validUntil: "2024-12-31T00:00:00.000Z",
+ *   emailInfo: {
+ *     messageId: "gmail_message_id",
+ *     sender: "user@gmail.com",
+ *     subject: "Email subject",
+ *     receivedAt: "2024-12-31T00:00:00.000Z",
+ *     snippet: "Optional email snippet"
+ *   }
  * }
  */
 export const createQuotation = async (req, res) => {
     try {
-        const { customer, items, subTotal, totalDiscount, grandTotal, status, validUntil } = req.body;
+        const { customer, items, subTotal, totalDiscount, grandTotal, status, validUntil, emailInfo } = req.body;
 
         // ✅ Basic validation
         if (!customer || !items?.length) {
@@ -150,7 +157,7 @@ export const createQuotation = async (req, res) => {
         // }
 
         // ✅ Create new quotation
-        const quotation = new Quotation({
+        const quotationData = {
             customer,
             items,
             subTotal,
@@ -158,7 +165,20 @@ export const createQuotation = async (req, res) => {
             grandTotal,
             status: status || 'Draft',
             validUntil,
-        });
+        };
+
+        // Add emailInfo if provided
+        if (emailInfo) {
+            quotationData.emailInfo = {
+                messageId: emailInfo.messageId,
+                sender: emailInfo.sender,
+                subject: emailInfo.subject,
+                receivedAt: emailInfo.receivedAt,
+                snippet: emailInfo.snippet
+            };
+        }
+
+        const quotation = new Quotation(quotationData);
 
         // Save quotation (auto-generates quotationId)
         await quotation.save();
