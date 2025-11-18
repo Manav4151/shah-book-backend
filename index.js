@@ -2,7 +2,7 @@ import express from "express";
 import cors from "cors";
 import path from "path";
 import router from "./routes/book.routes.js";
-import emailRouter from "./routes/email.routes.js";
+// import emailRouter from "./routes/email.routes.js";
 import quotationRouter from "./routes/quotation.routes.js";
 import commonRouter from "./routes/common.routes.js";
 import templateRouter from "./routes/template.routes.js";
@@ -48,7 +48,7 @@ app.use('/public', express.static(path.join(process.cwd(), 'public')));
 // Use the book routes for any request to /api/books
 app.use('/api/books', router);
 // Use the email routes for any request to /api/emails
-app.use('/api/emails', emailRouter);
+// app.use('/api/emails', emailRouter);
 // Use the template routes for any request to /api/templates
 app.use('/api/templates', templateRouter);
 // Use the quotation routes for any request to /api/quotation
@@ -58,7 +58,7 @@ app.use('/api/company-profiles', companyProfileRouter);
 // google api routes
 app.use("/api/google", googleRoutes);
 // new email flow routes
-app.use('/api/new-email', newEmailRouter);
+// app.use('/api/new-email', newEmailRouter);
 // customer routes
 app.use('/api', commonRouter);
 // Debug middleware to log all requests

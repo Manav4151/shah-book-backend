@@ -34,7 +34,7 @@ export async function oauthCallback(req, res) {
     try {
 
         const { tokens } = await oauth2Client.getToken(code);
-        console.log("Tokens:", tokens);
+        // console.log("Tokens:", tokens);
         setCredentials(tokens);
 
         // Get user email from Google
@@ -70,13 +70,13 @@ export async function listEmails(req, res) {
     const userId = req.user?.id || 'anonymous';
     const { search, from, status, newer_than } = req.query;
 
-// Build the search query
-let queryParts = [];
-if (search) queryParts.push(search);       // General search term
-if (from) queryParts.push(`from:${from}`); // e.g., from=saarang
-if (status) queryParts.push(`is:${status}`); // e.g., status=unread
-if (newer_than) queryParts.push(`newer_than:${newer_than}`); // e.g., newer_than=7d
-const searchQuery = queryParts.join(' '); // Combine all parts with a space
+    // Build the search query
+    let queryParts = [];
+    if (search) queryParts.push(search);       // General search term
+    if (from) queryParts.push(`from:${from}`); // e.g., from=saarang
+    if (status) queryParts.push(`is:${status}`); // e.g., status=unread
+    if (newer_than) queryParts.push(`newer_than:${newer_than}`); // e.g., newer_than=7d
+    const searchQuery = queryParts.join(' '); // Combine all parts with a space
     try {
         const authData = await gmailAuthModel.findOne({ userId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
@@ -297,7 +297,7 @@ export async function downloadGoogleEmailAttachment(req, res) {
             if (part.filename && part.body?.attachmentId) {
                 // Decode filename to handle URL encoding
                 const decodedFilename = decodeURIComponent(filename);
-                if (part.filename === filename || part.filename === decodedFilename || 
+                if (part.filename === filename || part.filename === decodedFilename ||
                     part.filename.includes(decodedFilename) || decodedFilename.includes(part.filename)) {
                     attachmentId = part.body.attachmentId;
                     attachmentMimeType = part.mimeType;
@@ -330,7 +330,7 @@ export async function downloadGoogleEmailAttachment(req, res) {
         // Set proper headers
         const contentType = attachmentMimeType || 'application/octet-stream';
         const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
-        
+
         res.setHeader('Content-Type', contentType);
         res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
         res.setHeader('Content-Length', buffer.length);
@@ -346,15 +346,4 @@ export async function downloadGoogleEmailAttachment(req, res) {
     }
 }
 
-/* 
-i want on flow for quotation generation flow for that i have,
-one book listing page with all the books thats data come from collection (book model and fields like title, author, isbn, year, classification, publisher_name, pricingid).
-for pricing detail another schema called book_pricing with fields like book, binding_type, price, currency, source.(for single book there can be multiple pricing detail based on source).
-
-so now i want to generate quotation from that data that i have, so in listing screen i show select checkbox and button for generate quotation.
-so now what i need to do because i wnat one screen or view for display selected book for quotation and its lowest pricing from its assoiciated pricing detail. and field for enter the quantity than button for generate quotation.
-i also have quotation schema for store quotation data.
-
-so how i can manage that flow? do i need to craete helper api for display selected book and its lowest pricing from pricing detail.and than generate quotation api. for actual quotation generation. i attach schema for quotation for reference.
-*/
 

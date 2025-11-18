@@ -2,67 +2,10 @@ import Book from '../models/book.schema.js';
 import BookPricing from '../models/BookPricing.js';
 import Publisher from '../models/publisher.schema.js';
 
-/**
- * ----------------------------------------------------------------
- * 헬퍼 함수 (Helper Functions)
- * ----------------------------------------------------------------
- */
+
 function escapeRegex(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
-
-/**
- * Checks the pricing status for an existing book.
- * @param {object} existingBook - The book document from the database.
- * @param {object} pricingData - The new pricing data from the request.
- * @returns {object} An object with the pricing action and details.
- */
-// export const checkPricingStatus = async (existingBook, pricingData) => {
-//   const { source, rate, discount } = pricingData;
-
-//   const existingPricing = await BookPricing.findOne({
-//     book: existingBook._id,
-//     source,
-//   });
-
-//   // If source is new for this book, add a new price.
-//   if (!existingPricing) {
-//     return {
-//       action: 'ADD_PRICE',
-//       message: 'New pricing source for this book.',
-//       details: { bookId: existingBook._id }
-//     };
-//   }
-
-//   // If source exists, check for differences.
-//   const isRateDifferent = existingPricing.rate !== rate;
-//   const isDiscountDifferent = existingPricing.discount !== discount;
-
-//   if (isRateDifferent || isDiscountDifferent) {
-//     return {
-//       action: 'UPDATE_PRICE',
-//       message: 'Existing pricing found with different values.',
-//       details: {
-//         bookId: existingBook._id,
-//         pricingId: existingPricing._id,
-//         differences: {
-//           rate: isRateDifferent ? { old: existingPricing.rate, new: rate } : undefined,
-//           discount: isDiscountDifferent ? { old: existingPricing.discount, new: discount } : undefined,
-//         }
-//       }
-//     };
-//   }
-
-//   // If everything is identical.
-//   return {
-//     action: 'NO_CHANGE',
-//     message: 'Identical pricing already exists for this source.',
-//     details: {
-//       bookId: existingBook._id,
-//       pricingId: existingPricing._id
-//     }
-//   };
-// };
 
 /**
  * A helper function to find an existing publisher by name or return null if not found.

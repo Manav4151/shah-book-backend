@@ -6,7 +6,12 @@ import BookPricing from "../models/BookPricing.js";
 import Publisher from "../models/publisher.schema.js";
 import Customer from "../models/customer.schema.js";
 import CompanyProfile from "../models/company.profile.schema.js";
-
+import { createTransport } from "nodemailer";
+import { ApiResponse } from "../lib/api-response.js";
+import { AppError } from "../lib/api-error.js";
+import gmailAuthModel from "../models/googleAuth.model.js";
+import { oauth2Client } from "../config/googleClient.js";
+import { google } from "googleapis";
 export const getQuotations = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
@@ -20,7 +25,8 @@ export const getQuotations = async (req, res) => {
         grandTotal: 1,
         status: 1,
         validUntil: 1,
-        createdAt: 1
+        createdAt: 1,
+        emailInfo: 1
     })
 
         .populate({
@@ -56,7 +62,11 @@ export const getQuotationById = async (req, res) => {
             })
             .populate({
                 path: 'items.book',
-                select: 'title isbn author publisher edition'
+                select: 'title isbn author publisher edition',
+                populate: {
+                    path: "publisher",
+                    select: "name"
+                }
             });
 
         if (!quotation) {
@@ -68,6 +78,7 @@ export const getQuotationById = async (req, res) => {
             message: "Quotation fetched successfully",
             quotation
         });
+
     } catch (error) {
         logger.error('Error fetching quotation by ID:', error);
         res.status(500).json({ success: false, message: 'Server error while fetching quotation.' });
@@ -222,9 +233,9 @@ export const updateQuotation = async (req, res) => {
 
         // Prevent editing quotations that are already Accepted or Rejected
         if (quotation.status === 'Accepted' || quotation.status === 'Rejected') {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Cannot edit quotations that are already Accepted or Rejected' 
+            return res.status(400).json({
+                success: false,
+                message: 'Cannot edit quotations that are already Accepted or Rejected'
             });
         }
 
@@ -275,7 +286,7 @@ export const updateQuotation = async (req, res) => {
 export const downloadQuotationPDF = async (req, res) => {
     try {
         const { id } = req.params;
-       
+
         // Fetch both pieces of data in parallel
         const { profileId } = req.query; // Get profileId from query
         const [quotation, companyProfile] = await Promise.all([
@@ -334,6 +345,159 @@ export const previewQuotationPDF = async (req, res) => {
         }
     }
 };
+export const sendQuotationEmail = async (req, res) => {
+    try {
+        console.log("req body", req.body);
+
+        const userId = req.user?.id || "anonymous";
+        console.log("user id", userId);
+
+        const { to, subject, text, html, quotationId, profileId } = req.body;
+
+        if (!to || !subject || !text) {
+            return res.status(400).json(
+                new AppError("To, Subject, and Text body are required", 400)
+            );
+        }
+
+        // -------------------------------------------
+        // 1️⃣ FETCH OAUTH TOKENS FROM DB
+        // -------------------------------------------
+        const authData = await gmailAuthModel.findOne({ userId });
+        if (!authData) {
+            return res.status(401).json(
+                new AppError("Gmail not connected. Please authenticate first.", 401)
+            );
+        }
+
+        oauth2Client.setCredentials({
+            access_token: authData.accessToken,
+            refresh_token: authData.refreshToken,
+        });
+
+        const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+        // -------------------------------------------
+        // 2️⃣ EMAIL HEADERS
+        // -------------------------------------------
+        let emailParts = [
+            `From: ${authData.email}\r\n`,
+            `To: ${to}\r\n`,
+            `Subject: ${subject}\r\n`,
+            `MIME-Version: 1.0\r\n`,
+        ];
+
+        let messageBody = html || text;
+
+        let attachments = [];
+
+        // -------------------------------------------
+        // 3️⃣ PDF ATTACHMENT (Quotation)
+        // -------------------------------------------
+        if (quotationId && profileId) {
+            console.log("quptation id", quotationId);
+
+            logger.info("Generating PDF for Quotation");
+            const [quotation, companyProfile] = await Promise.all([
+                fetchQuotationData(quotationId),
+                CompanyProfile.findById(profileId),
+            ]);
+
+            if (quotation && companyProfile) {
+                const pdfBuffer = await buildPdfBuffer(quotation, companyProfile);
+
+                attachments.push({
+                    filename: `quotation-${quotation.quotationId}.pdf`,
+                    mimeType: "application/pdf",
+                    data: pdfBuffer.toString("base64"),
+                });
+            }
+        }
+
+        // -------------------------------------------
+        // 4️⃣ User uploaded file attachment
+        // -------------------------------------------
+        if (req.file) {
+            attachments.push({
+                filename: req.file.originalname,
+                mimeType: req.file.mimetype,
+                data: req.file.buffer.toString("base64"),
+            });
+        }
+
+        let finalEmail;
+
+        // -------------------------------------------
+        // 5️⃣ BUILD MIME EMAIL BODY
+        // -------------------------------------------
+        if (attachments.length > 0) {
+            const boundary = "myboundary123";
+
+            emailParts.push(
+                `Content-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n`
+            );
+
+            let mixedBody = "";
+
+            // Main Body
+            mixedBody += `--${boundary}\r\n`;
+            mixedBody += `Content-Type: text/html; charset="UTF-8"\r\n`;
+            mixedBody += `Content-Transfer-Encoding: 7bit\r\n\r\n`;
+            mixedBody += `${messageBody}\r\n\r\n`;
+
+            // Attachments
+            for (const att of attachments) {
+                mixedBody += `--${boundary}\r\n`;
+                mixedBody += `Content-Type: ${att.mimeType}; name="${att.filename}"\r\n`;
+                mixedBody += `Content-Disposition: attachment; filename="${att.filename}"\r\n`;
+                mixedBody += `Content-Transfer-Encoding: base64\r\n\r\n`;
+                mixedBody += `${att.data}\r\n\r\n`;
+            }
+
+            mixedBody += `--${boundary}--\r\n`;
+
+            finalEmail = emailParts.join("") + mixedBody;
+        } else {
+            // Simple HTML email
+            emailParts.push(`Content-Type: text/html; charset="UTF-8"\r\n\r\n`);
+            finalEmail = emailParts.join("") + messageBody;
+        }
+
+        // -------------------------------------------
+        // 6️⃣ BASE64URL ENCODE
+        // -------------------------------------------
+        const encodedMessage = Buffer.from(finalEmail)
+            .toString("base64")
+            .replace(/\+/g, "-")
+            .replace(/\//g, "_")
+            .replace(/=+$/, "");
+
+        // -------------------------------------------
+        // 7️⃣ SEND EMAIL VIA GMAIL API
+        // -------------------------------------------
+        await gmail.users.messages.send({
+            userId: "me",
+            requestBody: {
+                raw: encodedMessage,
+            },
+        });
+        if (quotationId) {
+            const updatedQuotation = await Quotation.findByIdAndUpdate(quotationId, { status: "Sent" }, { new: true });
+            console.log("update quotation", updatedQuotation);
+
+        }
+        return res.status(200).json(
+            new ApiResponse(200, null, "Quotation email sent successfully (Gmail API)")
+        );
+
+    } catch (error) {
+        console.error("Gmail API send error:", error);
+        return res.status(500).json(
+            new AppError("Error sending quotation email", 500, error.message)
+        );
+    }
+};
+
 
 
 // --- Reusable Logic ---
@@ -341,14 +505,44 @@ export const previewQuotationPDF = async (req, res) => {
 const fetchQuotationData = async (id) => {
     // This function can still throw an error, which will be caught by the controllers above.
     const quotation = await Quotation.findById(id)
-        .populate({ 
+        .populate({
             path: 'customer',
             select: 'name customerName address email phone'
         })
         .populate({ path: 'items.book', select: 'title isbn' });
     return quotation;
 };
+export const buildPdfBuffer = (quotation, companyProfile) => {
+    return new Promise((resolve, reject) => {
+        try {
+            const doc = new PDFDocument({ size: "A4", margin: 50 });
 
+            // Collect PDF chunks here
+            let buffers = [];
+
+            // Capture data as it is generated
+            doc.on("data", buffers.push.bind(buffers));
+
+            // On end → combine chunks into a Buffer
+            doc.on("end", () => {
+                const pdfBuffer = Buffer.concat(buffers);
+                resolve(pdfBuffer);
+            });
+
+            // Generate the PDF using your same functions
+            generateHeader(doc, companyProfile);
+            generateCustomerInformation(doc, quotation);
+            generateQuotationTable(doc, quotation);
+            generateFooter(doc);
+
+            // Finalize PDF
+            doc.end();
+
+        } catch (err) {
+            reject(err);
+        }
+    });
+};
 function buildAndStreamPdf(res, quotation, companyProfile) {
     const doc = new PDFDocument({ size: 'A4', margin: 50 });
     doc.pipe(res);
@@ -435,3 +629,4 @@ function generateHr(doc, y) {
 function formatCurrency(amount) {
     return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD' }).format(amount);
 }
+
