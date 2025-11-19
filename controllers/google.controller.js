@@ -1,6 +1,10 @@
 import { google } from "googleapis";
 import { oauth2Client, generateAuthUrl, getToken, setCredentials } from "../config/googleClient.js";
 import gmailAuthModel from "../models/googleAuth.model.js";
+import { ObjectId } from "mongodb";
+import { Buffer } from "buffer";
+import { log } from "console";
+
 
 
 /**
@@ -78,7 +82,8 @@ export async function listEmails(req, res) {
     if (newer_than) queryParts.push(`newer_than:${newer_than}`); // e.g., newer_than=7d
     const searchQuery = queryParts.join(' '); // Combine all parts with a space
     try {
-        const authData = await gmailAuthModel.findOne({ userId });
+        const newUserId = new ObjectId(req.user.id);
+        const authData = await gmailAuthModel.findOne({ userId: newUserId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
 
         // Set credentials from DB
@@ -192,8 +197,6 @@ export async function getEmailContent(req, res) {
         res.status(500).json({ message: "Error fetching email content", error });
     }
 }
-
-import { Buffer } from "buffer";
 
 /**
  * Format a Gmail API message response into clean JSON

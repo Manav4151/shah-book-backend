@@ -4,11 +4,9 @@ const router = Router();
 import uploadMiddleware from '../middleware/upload.middleware.js';
 import { createOrUpdateBook, deleteBook, deleteBookPricing, deleteMultipleBooks, getBookPricing, getBooks, updateBook, validateExcelFile, bulkImportExcelFile, getBookSuggestions, markAsOutofPrint, getBookDetails } from '../controllers/book.controller.js';
 import { checkBookStatus } from '../controllers/duplicate.controller.js';
+import { authenticate, authorizeRoles } from '../middleware/auth.middleware.js';
 
-// Chained route for getting all books and creating a new book
-// Route for checking if a book exists and what action to take
-// router.post('/check', checkBookStatus);
-
+router.use(authenticate);
 // Route for creating/updating a book or its pricing
 router.post('/', createOrUpdateBook);
 
@@ -25,14 +23,14 @@ router.post('/', createOrUpdateBook);
 router.get('/', getBooks); // GET /api/books
 router.get('/:bookId/details', getBookDetails);
 router.get('/:bookId/pricing', getBookPricing);
-router.put('/:bookId/outOfPrint', markAsOutofPrint);
+router.put('/:bookId/outOfPrint', authorizeRoles("ADMIN", "INVENTORY_MANAGER"), markAsOutofPrint);
 // Update route
 router.put('/:bookId', updateBook); // PUT /api/books/some_id (updates book and optionally pricing)
 
 // Delete routes
 // router.delete('/:bookId', deleteBook); // DELETE /api/books/some_id (deletes book and all its pricing)
-router.delete('/pricing/:pricingId', deleteBookPricing); // DELETE /api/books/pricing/some_pricing_id (deletes specific pricing)
-router.delete('/bulk', deleteMultipleBooks); // DELETE /api/books/bulk (deletes multiple books and their pricing)
+router.delete('/pricing/:pricingId', authorizeRoles("ADMIN", "INVENTORY_MANAGER"), deleteBookPricing); // DELETE /api/books/pricing/some_pricing_id (deletes specific pricing)
+router.delete('/bulk', authorizeRoles("ADMIN", "INVENTORY_MANAGER"), deleteMultipleBooks); // DELETE /api/books/bulk (deletes multiple books and their pricing)
 
 // Bulk import routes
 router.post('/validate-excel', uploadMiddleware, validateExcelFile); // POST /api/books/validate-excel (validate Excel column mapping)

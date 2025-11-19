@@ -1,7 +1,8 @@
 import { Router } from "express";
 import { createQuotation, downloadQuotationPDF, getQuotationById, getQuotations, previewQuotation, previewQuotationPDF, sendQuotationEmail, updateQuotation } from "../controllers/quotation.controller.js";
 import multer from "multer";
-import { authenticate } from "../middleware/auth.middleware.js";
+import { authenticate, authorizeRoles } from "../middleware/auth.middleware.js";
+import { ROLES } from "../lib/auth.js";
 // Apply authentication middleware to all template routes
 const router = Router();
 router.use(authenticate);
@@ -33,24 +34,62 @@ const upload = multer({
         }
     }
 });
-router.get('/', getQuotations);
+// 🔍 View all quotations — all roles allowed
+router.get(
+    "/",
+    authorizeRoles(),   // this means ALLOW ALL ROLES
+    getQuotations
+);
 
-// Place specific routes before dynamic :id routes to avoid route conflicts
-router.route('/preview').post(previewQuotation);
-router.route('/create').post(createQuotation);
-// share quotation 
-router.post('/sendQuotation', upload.single('attachment'), sendQuotationEmail);
-// 4. Add the new routes for handling specific actions by ID
-router.route('/:id/download')
-    .get(downloadQuotationPDF);
+// 🔍 Preview quotation (all roles)
+router.post(
+    "/preview",
+    authorizeRoles(),
+    previewQuotation
+);
 
-router.route('/:id/preview')
-    .get(previewQuotationPDF);
+// 📝 Create quotation — ONLY ADMIN + SALES_EXECUTIVE
+router.post(
+    "/create",
+    authorizeRoles(ROLES.ADMIN, ROLES.SALES_EXECUTIVE),
 
-// Update quotation (must be before get by id to avoid conflicts)
-router.put('/:id', updateQuotation);
+    createQuotation
+);
 
-// Get single quotation by ID (must be last to avoid conflicts with /preview and /create)
-router.get('/:id', getQuotationById);
+// 📤 Share quotation (also only creation roles)
+router.post(
+    "/sendQuotation",
+    authorizeRoles(ROLES.ADMIN, ROLES.SALES_EXECUTIVE),
+    upload.single("attachment"),
+    sendQuotationEmail
+);
+
+// 📥 Download PDF (all roles)
+router.get(
+    "/:id/download",
+    authorizeRoles(),
+    downloadQuotationPDF
+);
+
+// 🔎 Preview PDF (all roles)
+router.get(
+    "/:id/preview",
+    authorizeRoles(),
+    previewQuotationPDF
+);
+
+// ✏️ Update quotation — ONLY ADMIN + SALES_EXECUTIVE
+router.put(
+    "/:id",
+    authorizeRoles(ROLES.ADMIN, ROLES.SALES_EXECUTIVE),
+    updateQuotation
+);
+
+// 🔎 Get single quotation (all roles)
+router.get(
+    "/:id",
+    authorizeRoles(),
+    getQuotationById
+);
 
 export default router;
