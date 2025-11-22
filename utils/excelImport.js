@@ -89,7 +89,7 @@ export async function validateExcelMapping(filePath) {
 
         // Define required fields for books and pricing separately
         const requiredBookFields = ['title', 'author'];
-        const requiredPricingFields = ['rate', 'currency'];
+        const requiredPricingFields = ['rate'];
 
         // Check which fields are mapped for books and pricing
         const mappedBookFields = mappedFields.filter(field =>
@@ -281,7 +281,7 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
                 const { bookData, pricingData, publisherData } = processBookRow(row, mapping, sourceName, {
                     validateISBN,
                     cleanIsbnForValidation
-                  });
+                });
                 if (!bookData.title || !pricingData.rate) {
                     throw new Error("Missing required data (Title or Price).");
                 }

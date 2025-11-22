@@ -1,6 +1,10 @@
 import { google } from "googleapis";
-import { oauth2Client, generateAuthUrl, getToken, setCredentials } from "../config/googleClient.js";
+import { generateAuthUrl, getGoogleClient } from "../config/googleClient.js";
 import gmailAuthModel from "../models/googleAuth.model.js";
+import { ObjectId } from "mongodb";
+import { Buffer } from "buffer";
+import { log } from "console";
+
 
 
 /**
@@ -32,10 +36,11 @@ export async function oauthCallback(req, res) {
     console.log("User ID", userId);
 
     try {
-
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
         const { tokens } = await oauth2Client.getToken(code);
-        console.log("Tokens:", tokens);
-        setCredentials(tokens);
+        // console.log("Tokens:", tokens);
+        oauth2Client.setCredentials(tokens);
 
         // Get user email from Google
         const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
@@ -68,13 +73,24 @@ export async function oauthCallback(req, res) {
  */
 export async function listEmails(req, res) {
     const userId = req.user?.id || 'anonymous';
+    const { search, from, status, newer_than } = req.query;
 
+    // Build the search query
+    let queryParts = [];
+    if (search) queryParts.push(search);       // General search term
+    if (from) queryParts.push(`from:${from}`); // e.g., from=saarang
+    if (status) queryParts.push(`is:${status}`); // e.g., status=unread
+    if (newer_than) queryParts.push(`newer_than:${newer_than}`); // e.g., newer_than=7d
+    const searchQuery = queryParts.join(' '); // Combine all parts with a space
     try {
-        const authData = await gmailAuthModel.findOne({ userId });
+        const newUserId = new ObjectId(req.user.id);
+        const authData = await gmailAuthModel.findOne({ userId: newUserId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
 
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
         // Set credentials from DB
-        setCredentials({
+        oauth2Client.setCredentials({
             access_token: authData.accessToken,
             refresh_token: authData.refreshToken
         });
@@ -84,7 +100,8 @@ export async function listEmails(req, res) {
         // Get list of messages
         const response = await gmail.users.messages.list({
             userId: "me",
-            maxResults: 10 // You can increase or implement pagination
+            maxResults: 10, // You can increase or implement pagination
+            q: searchQuery,
         });
         const messages = response.data.messages || [];
         // Step 2: Loop over message IDs and fetch details
@@ -131,7 +148,10 @@ export async function getEmailContent(req, res) {
         const authData = await gmailAuthModel.findOne({ userId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
 
-        setCredentials({
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
+        // Set credentials from DB
+        oauth2Client.setCredentials({
             access_token: authData.accessToken,
             refresh_token: authData.refreshToken
         });
@@ -144,14 +164,45 @@ export async function getEmailContent(req, res) {
             format: "full"
         });
         const jsonMail = formatGmailMessage(response.data);
+
+        // Always include attachment data if attachments exist - avoids separate API calls
+        if (Array.isArray(jsonMail.attachments) && jsonMail.attachments.length > 0) {
+            // Fetch attachment data in parallel
+            const hydrated = await Promise.all(jsonMail.attachments.map(async (att) => {
+                try {
+                    if (!att.attachmentId) {
+                        return { ...att, dataUrl: null };
+                    }
+
+                    const attResp = await gmail.users.messages.attachments.get({
+                        userId: "me",
+                        messageId,
+                        id: att.attachmentId
+                    });
+                    const raw = attResp.data?.data;
+                    if (!raw) {
+                        return { ...att, dataUrl: null };
+                    }
+                    // Gmail returns URL-safe base64
+                    const b64 = raw.replace(/-/g, '+').replace(/_/g, '/');
+                    // Return as data URL for easy inline preview on the client
+                    const dataUrl = `data:${att.mimeType || 'application/octet-stream'};base64,${b64}`;
+                    return { ...att, dataUrl };
+                } catch (e) {
+                    console.error('Failed to fetch attachment data', att.filename, e);
+                    return { ...att, dataUrl: null };
+                }
+            }));
+
+            jsonMail.attachments = hydrated;
+        }
+
         res.json(jsonMail);
     } catch (error) {
         console.error("Get Email Content Error:", error);
         res.status(500).json({ message: "Error fetching email content", error });
     }
 }
-
-import { Buffer } from "buffer";
 
 /**
  * Format a Gmail API message response into clean JSON
@@ -214,15 +265,97 @@ export function formatGmailMessage(message) {
     };
 }
 
-/* 
-i want on flow for quotation generation flow for that i have,
-one book listing page with all the books thats data come from collection (book model and fields like title, author, isbn, year, classification, publisher_name, pricingid).
-for pricing detail another schema called book_pricing with fields like book, binding_type, price, currency, source.(for single book there can be multiple pricing detail based on source).
+/**
+ * Download email attachment using Gmail API
+ * @route GET /api/google/emails/:messageId/attachments/:filename
+ */
+export async function downloadGoogleEmailAttachment(req, res) {
+    const { messageId, filename } = req.params;
+    const userId = req.user?.id || 'anonymous';
 
-so now i want to generate quotation from that data that i have, so in listing screen i show select checkbox and button for generate quotation.
-so now what i need to do because i wnat one screen or view for display selected book for quotation and its lowest pricing from its assoiciated pricing detail. and field for enter the quantity than button for generate quotation.
-i also have quotation schema for store quotation data.
+    try {
+        const authData = await gmailAuthModel.findOne({ userId });
+        if (!authData) {
+            return res.status(401).json({ message: "Gmail not connected" });
+        }
 
-so how i can manage that flow? do i need to craete helper api for display selected book and its lowest pricing from pricing detail.and than generate quotation api. for actual quotation generation. i attach schema for quotation for reference.
-*/
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
+        // Set credentials from DB
+        oauth2Client.setCredentials({
+            access_token: authData.accessToken,
+            refresh_token: authData.refreshToken
+        });
+
+        const gmail = google.gmail({ version: "v1", auth: oauth2Client });
+
+        // First, get the message to find the attachment
+        const messageResponse = await gmail.users.messages.get({
+            userId: "me",
+            id: messageId,
+            format: "full"
+        });
+
+        const message = messageResponse.data;
+        if (!message || !message.payload) {
+            return res.status(404).json({ message: "Email not found" });
+        }
+
+        // Find the attachment by filename
+        let attachmentId = null;
+        let attachmentMimeType = null;
+
+        function findAttachment(part) {
+            if (part.filename && part.body?.attachmentId) {
+                // Decode filename to handle URL encoding
+                const decodedFilename = decodeURIComponent(filename);
+                if (part.filename === filename || part.filename === decodedFilename ||
+                    part.filename.includes(decodedFilename) || decodedFilename.includes(part.filename)) {
+                    attachmentId = part.body.attachmentId;
+                    attachmentMimeType = part.mimeType;
+                    return;
+                }
+            }
+            if (part.parts) {
+                part.parts.forEach(findAttachment);
+            }
+        }
+
+        findAttachment(message.payload);
+
+        if (!attachmentId) {
+            return res.status(404).json({ message: "Attachment not found" });
+        }
+
+        // Download the attachment
+        const attachmentResponse = await gmail.users.messages.attachments.get({
+            userId: "me",
+            messageId: messageId,
+            id: attachmentId
+        });
+
+        // Decode base64 attachment data
+        const attachmentData = attachmentResponse.data.data;
+        const data = attachmentData.replace(/-/g, "+").replace(/_/g, "/");
+        const buffer = Buffer.from(data, "base64");
+
+        // Set proper headers
+        const contentType = attachmentMimeType || 'application/octet-stream';
+        const safeFilename = filename.replace(/[^a-zA-Z0-9._-]/g, '_');
+
+        res.setHeader('Content-Type', contentType);
+        res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+        res.setHeader('Content-Length', buffer.length);
+        res.setHeader('Cache-Control', 'no-cache');
+
+        // Send the buffer
+        res.send(buffer);
+
+        console.log(`Attachment downloaded successfully: ${filename} (${buffer.length} bytes)`);
+    } catch (error) {
+        console.error('Error downloading Google email attachment:', error);
+        res.status(500).json({ message: "Error downloading attachment", error: error.message });
+    }
+}
+
 

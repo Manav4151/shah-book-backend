@@ -1,17 +1,27 @@
 import { google } from "googleapis";
+import dotenv from "dotenv";
+dotenv.config();
 
 // Initialize OAuth2 Client with credentials from .env
-export const oauth2Client = new google.auth.OAuth2(
+const oauth2Client = new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,
     process.env.GOOGLE_REDIRECT_URI
 );
+
+export const getGoogleClient = () => {
+    return new google.auth.OAuth2(
+        process.env.GOOGLE_CLIENT_ID,
+        process.env.GOOGLE_CLIENT_SECRET,
+        process.env.GOOGLE_REDIRECT_URI
+    );
+};
 export const generateAuthUrl = (userId) => {
     return oauth2Client.generateAuthUrl({
-        // access_type: "offline",
+        access_type: "offline",
         scope: ["https://www.googleapis.com/auth/gmail.readonly", "https://www.googleapis.com/auth/userinfo.email",
-            "https://www.googleapis.com/auth/userinfo.profile",],
-        // prompt: "consent",
+            "https://www.googleapis.com/auth/userinfo.profile", "https://www.googleapis.com/auth/gmail.send",],
+        prompt: "consent",
         state: userId
     });
 };
