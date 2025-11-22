@@ -3,7 +3,6 @@ import Customer from '../models/customer.schema.js';
 
 /**
  * @description Create a new publisher
- * @route POST /api/v1/publishers
  * @access Private
  */
 export const createPublisher = async (req, res) => {
@@ -42,8 +41,6 @@ export const createPublisher = async (req, res) => {
 
 /**
  * @description Create a new customer
- * @route POST /api/v1/customers
- * @access Private
  */
 export const createCustomer = async (req, res) => {
     try {

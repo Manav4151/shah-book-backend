@@ -94,10 +94,6 @@ export const checkBookStatus = async (req, res) => {
     }
 
     const publisherId = await findPublisherId(publisherData.publisher_name);
-    if (!publisherId) {
-      // You might want to handle this case differently, e.g., create the publisher
-      // For now, we treat it as a potential new book unless matched by other means.
-    }
 
     // Rule 1 & 2: Check by ISBN first if it exists.
     if (bookData.isbn) {
@@ -177,17 +173,6 @@ export const checkBookStatus = async (req, res) => {
 
       if (bookByTitleAndPublisher) {
         // A book with the same title and publisher exists.
-        // Rule 3: This is a CONFLICT if the new book has a different ISBN.
-        // if (bookData.isbn && bookByTitleAndPublisher.isbn !== bookData.isbn) {
-        //   return res.status(200).json({
-        //     bookStatus: 'CONFLICT',
-        //     message: 'A book with this Title and Publisher already exists, but with a different ISBN.',
-        //     details: {
-        //       existingBook: bookByTitleAndPublisher,
-        //       conflictFields: { isbn: { old: bookByTitleAndPublisher.isbn, new: bookData.isbn } }
-        //     },
-        //   });
-        // }
         // Rule 5: It's a DUPLICATE if identifiers are missing or match.
         const pricing = await checkPricingLogic(bookByTitleAndPublisher, pricingData);
         return res.status(200).json({

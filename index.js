@@ -32,14 +32,6 @@ app.get("/favicon.ico", (req, res) => res.status(204).end());
 // --- Database Connection ---
 connectDB();
 
-
-try {
-  app.use("/api/auth", toNodeHandler(auth));
-  console.log("✅ SUCCESS: better-auth handler mounted at /api/auth.");
-} catch (error) {
-  console.error("❌ FAILED to mount better-auth handler:", error);
-}
-
 // --- Static Files ---
 // Serve static files from public directory
 app.use('/public', express.static(path.join(process.cwd(), 'public')));
@@ -47,8 +39,6 @@ app.use('/public', express.static(path.join(process.cwd(), 'public')));
 // --- API Routes ---
 // Use the book routes for any request to /api/books
 app.use('/api/books', router);
-// Use the email routes for any request to /api/emails
-// app.use('/api/emails', emailRouter);
 // Use the template routes for any request to /api/templates
 app.use('/api/templates', templateRouter);
 // Use the quotation routes for any request to /api/quotation
@@ -57,8 +47,6 @@ app.use('/api/quotations', quotationRouter);
 app.use('/api/company-profiles', companyProfileRouter);
 // google api routes
 app.use("/api/google", googleRoutes);
-// new email flow routes
-// app.use('/api/new-email', newEmailRouter);
 // customer routes
 app.use('/api', commonRouter);
 // Debug middleware to log all requests
