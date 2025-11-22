@@ -10,7 +10,7 @@ import { createTransport } from "nodemailer";
 import { ApiResponse } from "../lib/api-response.js";
 import { AppError } from "../lib/api-error.js";
 import gmailAuthModel from "../models/googleAuth.model.js";
-import { oauth2Client } from "../config/googleClient.js";
+import { getGoogleClient } from "../config/googleClient.js";
 import { google } from "googleapis";
 export const getQuotations = async (req, res) => {
     const page = parseInt(req.query.page) || 1;
@@ -370,6 +370,8 @@ export const sendQuotationEmail = async (req, res) => {
             );
         }
 
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
         oauth2Client.setCredentials({
             access_token: authData.accessToken,
             refresh_token: authData.refreshToken,
@@ -487,7 +489,10 @@ export const sendQuotationEmail = async (req, res) => {
 
         }
         return res.status(200).json(
-            new ApiResponse(200, null, "Quotation email sent successfully (Gmail API)")
+            {
+                success: true,
+                message: "Email sent successfully"
+            }
         );
 
     } catch (error) {

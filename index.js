@@ -7,7 +7,7 @@ import quotationRouter from "./routes/quotation.routes.js";
 import commonRouter from "./routes/common.routes.js";
 import templateRouter from "./routes/template.routes.js";
 import googleRoutes from "./routes/google.routes.js";
-import newEmailRouter from "./routes/new.eamil.routes.js";
+// import newEmailRouter from "./routes/new.eamil.routes.js";
 import companyProfileRouter from "./routes/company.profile.routes.js";
 import { connectDB } from "./config/db.js";
 import { auth } from "./lib/auth.js";

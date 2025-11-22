@@ -1,5 +1,5 @@
 import { google } from "googleapis";
-import { oauth2Client, generateAuthUrl, getToken, setCredentials } from "../config/googleClient.js";
+import { generateAuthUrl, getGoogleClient } from "../config/googleClient.js";
 import gmailAuthModel from "../models/googleAuth.model.js";
 import { ObjectId } from "mongodb";
 import { Buffer } from "buffer";
@@ -36,10 +36,11 @@ export async function oauthCallback(req, res) {
     console.log("User ID", userId);
 
     try {
-
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
         const { tokens } = await oauth2Client.getToken(code);
         // console.log("Tokens:", tokens);
-        setCredentials(tokens);
+        oauth2Client.setCredentials(tokens);
 
         // Get user email from Google
         const oauth2 = google.oauth2({ version: "v2", auth: oauth2Client });
@@ -86,8 +87,10 @@ export async function listEmails(req, res) {
         const authData = await gmailAuthModel.findOne({ userId: newUserId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
 
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
         // Set credentials from DB
-        setCredentials({
+        oauth2Client.setCredentials({
             access_token: authData.accessToken,
             refresh_token: authData.refreshToken
         });
@@ -145,7 +148,10 @@ export async function getEmailContent(req, res) {
         const authData = await gmailAuthModel.findOne({ userId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
 
-        setCredentials({
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
+        // Set credentials from DB
+        oauth2Client.setCredentials({
             access_token: authData.accessToken,
             refresh_token: authData.refreshToken
         });
@@ -273,7 +279,10 @@ export async function downloadGoogleEmailAttachment(req, res) {
             return res.status(401).json({ message: "Gmail not connected" });
         }
 
-        setCredentials({
+        // 1️⃣ Create a FRESH client instance for THIS specific request
+        const oauth2Client = getGoogleClient();
+        // Set credentials from DB
+        oauth2Client.setCredentials({
             access_token: authData.accessToken,
             refresh_token: authData.refreshToken
         });
