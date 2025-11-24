@@ -31,7 +31,12 @@ app.use(express.urlencoded({ extended: true }));
 app.get("/favicon.ico", (req, res) => res.status(204).end());
 // --- Database Connection ---
 connectDB();
-
+try {
+  app.use("/api/auth", toNodeHandler(auth));
+  console.log("✅ SUCCESS: better-auth handler mounted at /api/auth.");
+} catch (error) {
+  console.error("❌ FAILED to mount better-auth handler:", error);
+}
 // --- Static Files ---
 // Serve static files from public directory
 app.use('/public', express.static(path.join(process.cwd(), 'public')));
