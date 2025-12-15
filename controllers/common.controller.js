@@ -1,9 +1,10 @@
 import Publisher from '../models/publisher.schema.js';
 import Customer from '../models/customer.schema.js';
+import { ROLES } from '../lib/auth.js';
+import { logger } from 'better-auth';
 
 /**
  * @description Create a new publisher
- * @route POST /api/v1/publishers
  * @access Private
  */
 export const createPublisher = async (req, res) => {
@@ -42,39 +43,78 @@ export const createPublisher = async (req, res) => {
 
 /**
  * @description Create a new customer
- * @route POST /api/v1/customers
- * @access Private
  */
 export const createCustomer = async (req, res) => {
-    try {
-        const { name, email, phone, discount,contactPerson, contactPersonEmail, contactPersonPhone, address } = req.body;
+  try {
+    const user = req.user;
 
-        if (!name && !email) {
-            return res.status(400).json({ message: 'Customer name or email is required.' });
-        }
-
-        if (email) {
-            const existingCustomer = await Customer.findOne({ 'email': email });
-            if (existingCustomer) {
-                return res.status(409).json({ message: 'A customer with this email already exists.' });
-            }
-        }
-
-        const newCustomer = new Customer({ name, email , phone, discount, contactPerson, contactPersonEmail, contactPersonPhone, address });
-        await newCustomer.save();
-
-        return res.status(201).json({
-            message: 'Customer created successfully.',
-            data: newCustomer,
-        });
-    } catch (error) {
-        console.error('Error creating customer:', error);
-        if (error.name === 'ValidationError') {
-            return res.status(400).json({ message: error.message });
-        }
-        return res.status(500).json({ message: 'Internal server error.' });
+    // 1️⃣ Validate Authentication
+    if (!user) {
+      return res.status(401).json({ message: "Not authenticated" });
     }
+
+    const agentId = user.agentId;
+
+    // 2️⃣ Prevent access if user is not system admin and has no agent
+    if (!agentId) {
+      return res.status(403).json({ message: "No agent assigned to this user" });
+    }
+
+    const {
+      name,
+      email,
+      phone,
+      discount,
+      contactPerson,
+      contactPersonEmail,
+      contactPersonPhone,
+      address,
+    } = req.body;
+
+    if (!name && !email) {
+      return res.status(400).json({
+        message: "Customer name or email is required.",
+      });
+    }
+
+    // 3️⃣ Check duplicates inside this agent ONLY
+    if (email) {
+      const existing = await Customer.findOne({
+        email,
+        agentId, // scoped to tenant
+      });
+
+      if (existing) {
+        return res.status(409).json({
+          message: "A customer with this email already exists for your agent.",
+        });
+      }
+    }
+
+    // 4️⃣ Add agentId while saving
+    const newCustomer = await Customer.create({
+      name,
+      email,
+      phone,
+      discount,
+      contactPerson,
+      contactPersonEmail,
+      contactPersonPhone,
+      address,
+      agentId,
+    });
+
+    return res.status(201).json({
+      message: "Customer created successfully.",
+      data: newCustomer,
+    });
+
+  } catch (error) {
+    console.error("Error creating customer:", error);
+    return res.status(500).json({ message: "Internal server error." });
+  }
 };
+
 
 
 
@@ -86,56 +126,67 @@ export const createCustomer = async (req, res) => {
  * @access  Public
  */
 export const getPublisherSuggestions = async (req, res) => {
-    try {
-        const { q } = req.query;
-
-        // If the query is empty or too short, return an empty array
-        if (!q || q.trim().length < 1) {
-            return res.json({ success: true, publishers: [] });
-        }
-
-        // Perform a fuzzy search on the 'name' field using the text index
-        // const publishers = await Publisher.find(
-        //     { $text: { $search: q } },
-        //     { score: { $meta: "textScore" } } // Rank results by relevance
-        // )
-        //     .sort({ score: { $meta: "textScore" } })
-        //     .limit(10) // Limit to the top 10 results
-        //     .select("name"); // Only return the name field
-
-       
-
-        const publishers = await Publisher.aggregate([
-            {
-                $search: {
-                    // Make sure this index name matches the one you created in Atlas
-                    index: 'publisher_autocomplete',
-                    autocomplete: {
-                        query: q,
-                        path: 'name', // The field we are searching in
-                        tokenOrder: 'sequential',
-                        fuzzy: {
-                            maxEdits: 1,      // Allow for 1 typo
-                            prefixLength: 2,  // The typo can't be in the first 2 letters
-                        }
-                    }
-                }
-            },
-            {
-                // Limit the results for performance
-                $limit: 10
-            },
-            {
-                // Only return the fields we need
-                $project: {
-                    _id: 0,
-                    name: 1
-                }
-            }
-        ]);
-         res.json({ success: true, publishers });
-    } catch (error) {
-        console.error('Error fetching publisher suggestions:', error);
-        res.status(500).json({ success: false, message: 'Server error while fetching suggestions.', error: error.message });
+  try {
+    const { q } = req.query;
+    const agentId = req.user?.agentId;
+    if (!q || q.trim().length < 1) {
+      return res.json({ success: true, publishers: [] });
     }
+
+    const publishers = await Publisher.find(
+      { name: { $regex: q, $options: "i" } },
+      { _id: 0, name: 1 } // only return name field
+    ).limit(10);
+
+    res.json({ success: true, publishers });
+
+  } catch (error) {
+    console.error("Error:", error);
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+
+
+export const getCustomer = async (req, res) => {
+  try {
+    const agentId = req.user?.agentId;
+    logger.info(`Agent ID: ${agentId}`);
+    // System Admin → can view all customers (optional logic)
+    const isSystemAdmin = req.user.role === ROLES.SYSTEM_ADMIN;
+
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const skip = (page - 1) * limit;
+
+    const search = req.query.search || "";
+    const searchQuery = {
+      ...(search && {
+        $or: [
+          { name: { $regex: search, $options: "i" } },
+          { email: { $regex: search, $options: "i" } }
+        ]
+      }),
+      ...(!isSystemAdmin && { agentId }) // Tenant filter applied only for non-system-admin
+    };
+
+    const [customers, total] = await Promise.all([
+      Customer.find(searchQuery).skip(skip).limit(limit).sort({ createdAt: -1 }),
+      Customer.countDocuments(searchQuery)
+    ]);
+
+    return res.status(200).json({
+      message: "Customers fetched successfully",
+      customers: customers,
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      },
+    });
+
+  } catch (error) {
+    console.error("Error fetching customers:", error);
+    return res.status(500).json({ message: "Internal server error" });
+  }
 };

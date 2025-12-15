@@ -8,16 +8,6 @@
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "nodemonConfig": {
-    "watch": [
-      "controllers",
-      "models",
-      "routes",
-      "middleware",
-      "lib",
-      "utils",
-      "index.js",
-      "server.js"
-    ],
     "ignore": [
       "logs/**/*",
       "uploads/**/*",

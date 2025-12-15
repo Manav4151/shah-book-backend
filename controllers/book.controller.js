@@ -7,7 +7,9 @@ import { log } from 'console';
 import { logger } from '../lib/logger.js';
 import { create } from 'domain';
 import Publisher from '../models/publisher.schema.js';
-
+import { ROLES } from '../lib/auth.js';
+import BookVendorPricing from '../models/bookvendorpricing.schema.js';
+import Vendor from '../models/vendor.schema.js';
 
 // --- ISBN Helpers ---
 const cleanIsbnInput = (raw) => {
@@ -56,28 +58,42 @@ const isValidIsbn = (raw) => {
   return false;
 };
 
-export const getOrCreatePublisher = async (publisherName) => {
-  if (!publisherName || typeof publisherName !== 'string' || publisherName.trim() === '') {
-    // Handle cases where publisher name is missing or invalid
-    // Depending on requirements, you could throw an error or return null
-    throw new Error('Publisher name is required and must be a non-empty string.');
+export const getOrCreatePublisher = async (publisherName, agentId) => {
+  console.log("Agent id", agentId);
+  if (!agentId) {
+    throw new Error("Agent ID is required to create or fetch publisher");
+  }
+
+  if (!publisherName || typeof publisherName !== "string" || !publisherName.trim()) {
+    throw new Error("Publisher name is required and must be a non-empty string.");
   }
 
   const trimmedName = publisherName.trim().toUpperCase();
 
-  // Find a publisher with a case-insensitive match
+  // 🔍 Find publisher only within SAME AGENT
   const existingPublisher = await Publisher.findOne({
-    name: trimmedName
+    name: trimmedName,
+    agentId: agentId
   });
+
   if (existingPublisher) {
     return existingPublisher._id;
   }
 
-  // If no publisher is found, create a new one
-  const newPublisher = await Publisher.create({ name: trimmedName });
+  // ➕ Create publisher with correct tenant
+  const newPublisher = await Publisher.create({
+    name: trimmedName,
+    agentId: agentId
+  });
+
   return newPublisher._id;
 };
+
 export const createOrUpdateBook = async (req, res) => {
+  const agentId = req.user?.agentId; // 🟢 Secure Tenant Check
+  if (!agentId) {
+    return res.status(403).json({ success: false, message: "Agent not assigned" });
+  }
   const { bookData, pricingData, bookId, pricingId, status, pricingAction, publisherData } = req.body;
 
   if (!status || !bookData || !pricingData) {
@@ -97,13 +113,14 @@ export const createOrUpdateBook = async (req, res) => {
   if (status === 'NEW') {
     try {
 
-      const publisherID = getOrCreatePublisher(publisherData.publisher_name);
+      const publisherID = await getOrCreatePublisher(publisherData.publisher_name, agentId);
       bookData.publisher = publisherID;
+      bookData.agentId = agentId;
       const newBook = new Book(bookData);
       const savedBook = await newBook.save();
 
       try {
-        const newBookPricing = new BookPricing({ ...pricingData, book: savedBook._id });
+        const newBookPricing = new BookPricing({ ...pricingData, book: savedBook._id, agentId });
         const savedPricing = await newBookPricing.save();
 
         return res.status(201).json({
@@ -128,8 +145,11 @@ export const createOrUpdateBook = async (req, res) => {
   // --- ACTION: ADD_PRICE ---
   if (pricingAction === 'ADD_PRICE') {
     if (!bookId) return res.status(400).json({ success: false, message: 'bookId is required to add new pricing.' });
+    const book = await Book.findOne({ _id: bookId, agentId });
+    if (!book) return res.status(403).json({ success: false, message: "Unauthorized: Book does not belong to your agent" });
+
     try {
-      const newPricing = new BookPricing({ ...pricingData, book: bookId });
+      const newPricing = new BookPricing({ ...pricingData, book: bookId, agentId });
       const savedPricing = await newPricing.save();
       return res.status(201).json({ success: true, message: 'New pricing added successfully.', data: savedPricing });
     } catch (error) {
@@ -143,9 +163,13 @@ export const createOrUpdateBook = async (req, res) => {
     if (!bookId || !pricingId) {
       return res.status(400).json({ success: false, message: 'bookId and pricingId are required for an update.' });
     }
+    const book = await Book.findOne({ _id: bookId, agentId });
+    if (!book) return res.status(403).json({ success: false, message: "Unauthorized: Book does not belong to this agent" });
     try {
       const updatedBook = await Book.findByIdAndUpdate(bookId, bookData, { new: true });
-      const updatedPricing = await BookPricing.findByIdAndUpdate(pricingId, pricingData, { new: true });
+      const updatedPricing = await BookPricing.findByIdAndUpdate({ _id: pricingId, agentId }, // 🟢 must match agent
+        pricingData,
+        { new: true });
 
       return res.status(200).json({
         success: true,
@@ -163,146 +187,283 @@ export const createOrUpdateBook = async (req, res) => {
 };
 
 // --- GET ALL BOOKS (with Pagination) ---
+// export const getBooks = async (req, res) => {
+//   try {
+//     const userAgentId = req.user?.agentId;
+//     const userRole = req.user?.role;
+
+//     if (!userAgentId && userRole !== ROLES.SYSTEM_ADMIN) {
+//       return res.status(403).json({
+//         success: false,
+//         message: "Agent ID is required for tenant-based access."
+//       });
+//     }
+
+//     logger.info('📚 Books API called');
+
+//     const page = parseInt(req.query.page) || 1;
+//     const limit = parseInt(req.query.limit) || 10;
+//     const skip = (page - 1) * limit;
+
+//     const { title, author, isbn, year, classification, publisher_name } = req.query;
+
+//     const filter = {};
+
+//     // 🔹 Enforce Tenant Isolation — Every book belongs to an agent
+//     if (userRole !== ROLES.SYSTEM_ADMIN) {
+//       filter.agentId = userAgentId; // Restrict to that agent's books
+//     }
+
+//     if (title) filter.title = { $regex: title, $options: "i" };
+//     if (author) filter.author = { $regex: author, $options: "i" };
+//     if (isbn) filter.isbn = { $regex: isbn, $options: "i" };
+//     if (year) filter.year = parseInt(year);
+//     if (classification) filter.classification = {
+//       $regex: classification,
+//       $options: "i"
+//     };
+
+//     // 🔍 Publisher Filter
+//     if (publisher_name) {
+//       const cleanName = publisher_name.trim().toUpperCase();
+//       const matchingPublishers = await Publisher.find({ name: cleanName }).select("_id");
+//       const publisherIds = matchingPublishers.map(p => p._id);
+//       filter.publisher = { $in: publisherIds };
+//     }
+
+//     const totalBooks = await Book.countDocuments(filter);
+
+//     const books = await Book.find(filter)
+//       .populate("publisher", "name")
+//       .skip(skip)
+//       .limit(limit)
+//       .sort({ createdAt: -1 });
+
+//     const bookIds = books.map(book => book._id);
+//     const pricingData = await BookPricing.find({ book: { $in: bookIds } });
+
+//     const pricingMap = new Map();
+//     pricingData.forEach(pricing => {
+//       const id = pricing.book.toString();
+//       if (!pricingMap.has(id)) pricingMap.set(id, []);
+//       pricingMap.get(id).push(pricing);
+//     });
+
+//     const booksWithPricing = books.map(book => {
+//       const obj = book.toObject();
+//       const pricing = pricingMap.get(book._id.toString()) || [];
+//       obj.pricing = pricing;
+//       obj.price = pricing.length > 0 ? pricing[0].rate : null;
+//       return obj;
+//     });
+
+//     const totalPages = Math.ceil(totalBooks / limit);
+
+//     res.status(200).json({
+//       success: true,
+//       books: booksWithPricing,
+//       pagination: {
+//         totalBooks,
+//         currentPage: page,
+//         totalPages,
+//         hasNextPage: page < totalPages,
+//         hasPrevPage: page > 1,
+//         showing: {
+//           from: skip + 1,
+//           to: Math.min(skip + limit, totalBooks),
+//           total: totalBooks,
+//         }
+//       }
+//     });
+
+//   } catch (error) {
+//     logger.error("❌ Error fetching books:", error.message);
+//     res.status(500).json({
+//       success: false,
+//       message: "Server error while fetching books.",
+//       error: error.message,
+//     });
+//   }
+// };
 export const getBooks = async (req, res) => {
   try {
-    logger.info('📚 Books API called', {
-      page: req.query.page,
-      limit: req.query.limit,
-      filters: req.query
-    });
+    const userAgentId = req.user?.agentId;
+    const userRole = req.user?.role;
+
+    if (!userAgentId && userRole !== ROLES.SYSTEM_ADMIN) {
+      return res.status(403).json({
+        success: false,
+        message: "Agent ID is required for tenant-based access."
+      });
+    }
+
+    logger.info("📚 Books API called");
 
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const skip = (page - 1) * limit;
 
-    // Extract filter parameters
-    const { title, author, isbn, year, classification, publisher_name } = req.query;
+    const {
+      search,
+      title,
+      author,
+      isbn,
+      year,
+      classification,
+      publisher_name,
+    } = req.query;
 
-    // Build the filter object
     const filter = {};
 
-    if (title) filter.title = { $regex: title, $options: 'i' };
-    if (author) filter.author = { $regex: author, $options: 'i' };
-    if (isbn) filter.isbn = { $regex: isbn, $options: 'i' };
-    if (year) filter.year = parseInt(year);
-    if (classification) filter.classification = { $regex: classification, $options: 'i' };
+    // Tenant Restriction
+    if (userRole !== ROLES.SYSTEM_ADMIN) {
+      filter.agentId = userAgentId;
+    }
 
-    // **Corrected Publisher Filtering Logic**
-    // 1. If a publisher_name filter is provided...
-    if (publisher_name) {
-      const cleanpublisher_name = publisher_name.trim().toUpperCase();
-      // 2. Find all publishers that match the name (case-insensitive).
-      const matchingPublishers = await Publisher.find(
-        { name: cleanpublisher_name }
-      ).select('_id'); // We only need their IDs.
+    // 🌟 PRIORITY WEIGHTED TEXT SEARCH + FUZZY SUPPORT
+    if (search) {
+      const cleanSearch = search.trim();
 
-      // 3. Get an array of just the IDs.
+      // 1. Find all Publisher IDs that match the search name
+      const matchingPublishers = await Publisher.find({
+        name: { $regex: cleanSearch, $options: "i" }
+      }).select("_id");
+      
       const publisherIds = matchingPublishers.map(p => p._id);
 
-      // 4. Use the $in operator to find books with a publisher in that list.
+      // 2. Add publisher IDs to the $or array
+      filter.$or = [
+        { isbn: { $regex: cleanSearch, $options: "i" } },
+        { title: { $regex: cleanSearch, $options: "i" } },
+        { author: { $regex: cleanSearch, $options: "i" } },
+        { publisher: { $in: publisherIds } } // <--- NEW: Matches books by these publishers
+      ];
+    }
+
+    // Other Filters
+    if (title) filter.title = { $regex: title, $options: "i" };
+    if (author) filter.author = { $regex: author, $options: "i" };
+    if (isbn) filter.isbn = { $regex: isbn, $options: "i" };
+    if (year) filter.year = parseInt(year);
+    if (classification)
+      filter.classification = { $regex: classification, $options: "i" };
+
+    // 🔍 Publisher Filter
+    if (publisher_name) {
+      const cleanName = publisher_name.trim().toUpperCase();
+      const matchingPublishers = await Publisher.find({ name: cleanName }).select("_id");
+      const publisherIds = matchingPublishers.map((p) => p._id);
       filter.publisher = { $in: publisherIds };
     }
 
-    // Get total count of books matching the filter
-    logger.info('🔍 Counting books with filter:', filter);
     const totalBooks = await Book.countDocuments(filter);
-    logger.info('📊 Total books found:', totalBooks);
 
-    // Find the books with the filter, pagination, and populate the publisher's name
-    logger.info('📖 Fetching books from database...');
-    const books = await Book.find(filter)
-      .populate('publisher', 'name') // <-- **CRUCIAL STEP**: Fetch the publisher's name
+    const projection = {};
+    const sort = { createdAt: -1 }; // default sort
+
+    // if (search) {
+    //   projection.score = { $meta: "textScore" };
+    //   sort.score = { $meta: "textScore" }; // apply relevance only when searching
+    // }
+
+    const books = await Book.find(filter, projection)
+      .populate("publisher", "name")
       .skip(skip)
       .limit(limit)
-      .sort({ createdAt: -1 });
+      .sort(sort);
 
-    logger.info('✅ Books fetched successfully:', books.length, 'books');
-
-    // --- The rest of your pricing logic can remain largely the same ---
-
-    const bookIds = books.map(book => book._id);
-    logger.info('💰 Fetching pricing data for', bookIds.length, 'books');
-    const pricingData = await BookPricing.find({ book: { $in: bookIds } });
-    logger.info('✅ Pricing data fetched:', pricingData.length, 'pricing records');
+    // Pricing integration
+    const bookIds = books.map((book) => book._id);
+    const pricingData = await BookVendorPricing.find({ book: { $in: bookIds } });
 
     const pricingMap = new Map();
-    pricingData.forEach(pricing => {
-      const bookId = pricing.book.toString();
-      if (!pricingMap.has(bookId)) {
-        pricingMap.set(bookId, []);
-      }
-      pricingMap.get(bookId).push(pricing);
+    pricingData.forEach((pricing) => {
+      const id = pricing.book.toString();
+      if (!pricingMap.has(id)) pricingMap.set(id, []);
+      pricingMap.get(id).push(pricing);
     });
 
-    const booksWithPricing = books.map(book => {
-      const bookObj = book.toObject();
+    const booksWithPricing = books.map((book) => {
+      const obj = book.toObject();
       const pricing = pricingMap.get(book._id.toString()) || [];
-      bookObj.pricing = pricing;
-      bookObj.price = pricing.length > 0 ? pricing[0].rate : null;
-      return bookObj;
+      obj.pricing = pricing;
+      obj.price = pricing.length > 0 ? pricing[0].rate : null;
+      return obj;
     });
 
     const totalPages = Math.ceil(totalBooks / limit);
-    const stats = {
-      totalBooks,
-      currentPage: page,
-      totalPages,
-      hasNextPage: page < totalPages,
-      hasPrevPage: page > 1,
-      showing: {
-        from: skip + 1,
-        to: Math.min(skip + limit, totalBooks),
-        total: totalBooks
-      }
-    };
-
-    logger.info('🎉 Books API response ready:', {
-      booksCount: booksWithPricing.length,
-      totalBooks,
-      page,
-      limit
-    });
 
     res.status(200).json({
       success: true,
       books: booksWithPricing,
-      pagination: stats,
-      filters: req.query // Return the original query params as filters
+      pagination: {
+        totalBooks,
+        currentPage: page,
+        totalPages,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
+        showing: {
+          from: skip + 1,
+          to: Math.min(skip + limit, totalBooks),
+          total: totalBooks,
+        },
+      },
     });
-
   } catch (error) {
-    logger.error('❌ Error fetching books:', {
-      error: error.message,
-      stack: error.stack,
-      query: req.query,
-      timestamp: new Date().toISOString()
-    });
-
+    logger.error("❌ Error fetching books:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching books.',
+      message: "Server error while fetching books.",
       error: error.message,
-      timestamp: new Date().toISOString()
     });
   }
 };
+
 // --- GET PRICING FOR A SPECIFIC BOOK ---
 export const getBookPricing = async (req, res) => {
   const { bookId } = req.params;
+  const agentId = req.user?.agentId;
+
   if (!mongoose.Types.ObjectId.isValid(bookId)) {
     return res.status(400).json({
       success: false,
-      message: 'Invalid book ID format.'
+      message: "Invalid book ID format."
     });
   }
+
   try {
-    const pricing = await BookPricing.find({ book: bookId });
-    res.status(200).json({ success: true, pricing: pricing, message: 'Book pricing fetched successfully.' });
+    // 🔍 First verify book belongs to this agent
+    const bookExists = await Book.findOne({
+      _id: bookId,
+      agentId
+    });
+
+    if (!bookExists) {
+      return res.status(404).json({
+        success: false,
+        message: "Book not found or access denied."
+      });
+    }
+
+    // 🔐 Fetch only agent-specific pricing
+    const pricing = await BookPricing.find({
+      book: bookId,
+      agentId
+    }).sort({ createdAt: -1 });
+
+    res.status(200).json({
+      success: true,
+      pricing,
+      message: pricing.length
+        ? "Book pricing fetched successfully."
+        : "No pricing found for this book."
+    });
+
   } catch (error) {
-    console.error('Error fetching book pricing:', error);
+    console.error("Error fetching book pricing:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching book pricing.',
+      message: "Server error while fetching book pricing.",
       error: error.message
     });
   }
@@ -310,77 +471,75 @@ export const getBookPricing = async (req, res) => {
 // --- GET BOOK DETAILS ---
 export const getBookDetails = async (req, res) => {
   const { bookId } = req.params;
+  const agentId = req.user?.agentId;
 
   if (!mongoose.Types.ObjectId.isValid(bookId)) {
     return res.status(400).json({
       success: false,
-      message: 'Invalid book ID format.'
+      message: "Invalid book ID format."
     });
   }
 
   try {
-    // Get book details first
-    const book = await Book.findById(bookId);
-
-
-    const publisher = await Publisher.findById(book.publisher);
-
+    // 🔐 Find book only inside current tenant (agent)
+    const book = await Book.findOne({
+      _id: bookId,
+      agentId
+    });
 
     if (!book) {
       return res.status(404).json({
         success: false,
-        message: 'Book not found.'
+        message: "Book not found or access denied."
       });
     }
 
-    // Get all pricing information for this book
-    const pricing = await BookPricing.find({ book: bookId })
-      .sort({ createdAt: -1 });
+    // 🔐 Fetch publisher inside tenant
+    const publisher = await Publisher.findOne({
+      _id: book.publisher,
+      agentId
+    }).select("name");
+
+    // 🔐 Fetch pricing inside tenant
+    const pricing = await BookVendorPricing.find({
+      book: bookId,
+      agentId
+    }).populate("vendor", "name").sort({ createdAt: -1 });
 
     // Calculate pricing statistics
     const pricingStats = {
       totalSources: pricing.length,
-      averageRate: pricing.length > 0
-        ? pricing.reduce((sum, p) => sum + p.rate, 0) / pricing.length
-        : 0,
+      averageRate:
+        pricing.length > 0
+          ? pricing.reduce((sum, p) => sum + p.rate, 0) / pricing.length
+          : 0,
       minRate: pricing.length > 0
         ? Math.min(...pricing.map(p => p.rate))
         : 0,
       maxRate: pricing.length > 0
         ? Math.max(...pricing.map(p => p.rate))
         : 0,
-      averageDiscount: pricing.length > 0
-        ? pricing.reduce((sum, p) => sum + (p.discount || 0), 0) / pricing.length
-        : 0
+      averageDiscount:
+        pricing.length > 0
+          ? pricing.reduce((sum, p) => sum + (p.discount || 0), 0) /
+          pricing.length
+          : 0
     };
 
     res.status(200).json({
       success: true,
       book: {
-        _id: book._id,
-        title: book.title,
-        author: book.author,
-        isbn: book.isbn,
-        year: book.year,
-        publisher_name: publisher.name,
-        classification: book.classification,
-        binding_type: book.binding_type,
-        createdAt: book.createdAt,
-        updatedAt: book.updatedAt,
-        edition: book.edition,
-        remarks: book.remarks
+        ...book.toObject(),
+        publisher_name: publisher?.name || "Not Found"
       },
-      pricing: pricing,
-      statistics: pricingStats,
-      message: pricing.length === 0
-        ? 'No pricing information found for this book.'
-        : `Found ${pricing.length} pricing source(s).`
+      pricing,
+      statistics: pricingStats
     });
   } catch (error) {
-    console.error('Error fetching book pricing:', error);
+    console.error("Error fetching book pricing:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error while fetching book pricing.',
+      message: "Server error while fetching book pricing.",
       error: error.message
     });
   }
@@ -441,33 +600,51 @@ export const deleteBook = async (req, res) => {
 // --- DELETE SPECIFIC BOOK PRICING DATA ---
 export const deleteBookPricing = async (req, res) => {
   const { pricingId } = req.params;
+  const agentId = req.user?.agentId; // 🔐 Identify tenant
 
   if (!mongoose.Types.ObjectId.isValid(pricingId)) {
     return res.status(400).json({
       success: false,
-      message: 'Invalid pricing ID format.'
+      message: "Invalid pricing ID format."
     });
   }
 
   try {
-    // Check if pricing record exists and get book details
-    const pricing = await BookPricing.findById(pricingId).populate('book', 'title author isbn');
+    // 🔍 Ensure pricing belongs to same tenant
+    const pricing = await BookPricing.findOne({
+      _id: pricingId,
+      agentId
+    }).populate("book", "title author isbn agentId");
+
     if (!pricing) {
       return res.status(404).json({
         success: false,
-        message: 'Pricing record not found.'
+        message: "Pricing record not found or unauthorized."
       });
     }
 
-    // Delete the specific pricing record
-    const deletedPricing = await BookPricing.findByIdAndDelete(pricingId);
+    // Also ensure book belongs to same tenant
+    if (pricing.book?.agentId?.toString() !== agentId.toString()) {
+      return res.status(403).json({
+        success: false,
+        message: "Unauthorized — This book does not belong to your agent."
+      });
+    }
 
-    // Check if there are any remaining pricing records for this book
-    const remainingPricingCount = await BookPricing.countDocuments({ book: pricing.book._id });
+    // Delete pricing record safely
+    const deletedPricing = await BookPricing.findOneAndDelete({
+      _id: pricingId,
+      agentId
+    });
+
+    const remainingPricingCount = await BookPricing.countDocuments({
+      book: pricing.book._id,
+      agentId
+    });
 
     res.status(200).json({
       success: true,
-      message: 'Pricing record deleted successfully.',
+      message: "Pricing record deleted successfully.",
       deletedPricing: {
         _id: deletedPricing._id,
         source: deletedPricing.source,
@@ -481,18 +658,19 @@ export const deleteBookPricing = async (req, res) => {
         author: pricing.book.author,
         isbn: pricing.book.isbn
       },
-      remainingPricingCount: remainingPricingCount,
+      remainingPricingCount,
       details: {
         pricingDeleted: true,
         bookStillExists: true,
         hasOtherPricingSources: remainingPricingCount > 0
       }
     });
+
   } catch (error) {
-    console.error('Error deleting book pricing:', error);
+    console.error("Error deleting book pricing:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error while deleting pricing record.',
+      message: "Server error while deleting pricing record.",
       error: error.message
     });
   }
@@ -502,84 +680,92 @@ export const deleteBookPricing = async (req, res) => {
 export const updateBook = async (req, res) => {
   const { bookId } = req.params;
   const { bookData, pricingData } = req.body;
+  const agentId = req.user?.agentId; // 🔐 Multi-tenant scope
 
   if (!mongoose.Types.ObjectId.isValid(bookId)) {
     return res.status(400).json({
       success: false,
-      message: 'Invalid book ID format.'
+      message: "Invalid book ID format.",
     });
   }
 
   if (!bookData) {
     return res.status(400).json({
       success: false,
-      message: 'Book data is required for update.'
+      message: "Book data is required for update.",
     });
   }
 
   try {
-    // Check if book exists
-    const existingBook = await Book.findById(bookId);
+    // 🔐 Check if book exists & belongs to this agent
+    const existingBook = await Book.findOne({ _id: bookId, agentId });
     if (!existingBook) {
       return res.status(404).json({
         success: false,
-        message: 'Book not found.'
+        message: "Book not found or unauthorized access.",
       });
     }
 
-    // Update the book
-    const updatedBook = await Book.findByIdAndUpdate(
-      bookId,
-      bookData,
+    // 🔐 Always enforce agentId on update
+    const updatedBook = await Book.findOneAndUpdate(
+      { _id: bookId, agentId },
+      { ...bookData, agentId },
       { new: true, runValidators: true }
     );
 
     let updatedPricing = null;
 
-    // If pricing data is provided, update or create pricing
+    // Pricing Update (if exists)
     if (pricingData) {
       const existingPricing = await BookPricing.findOne({
         book: bookId,
-        source: pricingData.source
+        agentId // 🔐 Pricing must also belong to SAME tenant
       });
 
       if (existingPricing) {
-        // Update existing pricing
-        updatedPricing = await BookPricing.findByIdAndUpdate(
-          existingPricing._id,
+        updatedPricing = await BookPricing.findOneAndUpdate(
+          { _id: existingPricing._id, agentId },
           pricingData,
           { new: true }
         );
       } else {
-        // Create new pricing
-        updatedPricing = new BookPricing({ ...pricingData, book: bookId });
+        // New pricing for this tenant
+        updatedPricing = new BookPricing({
+          ...pricingData,
+          book: bookId,
+          agentId
+        });
         await updatedPricing.save();
       }
     }
 
     res.status(200).json({
       success: true,
-      message: 'Book updated successfully.',
+      message: "Book updated successfully.",
       book: updatedBook,
-      pricing: updatedPricing
+      pricing: updatedPricing,
     });
   } catch (error) {
-    console.error('Error updating book:', error);
+    console.error("Error updating book:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error while updating book.',
-      error: error.message
+      message: "Server error while updating book.",
+      error: error.message,
     });
   }
 };
 
+
 export const deleteMultipleBooks = async (req, res) => {
-  logger.info('Deleting multiple books', req.body);
+  logger.info("Deleting multiple books", req.body);
+
   const { bookIds } = req.body;
+  const agentId = req.user?.agentId;
+
   if (!Array.isArray(bookIds) || bookIds.length === 0) {
     return res.status(400).json({
       success: false,
-      message: 'Request body must include a non-empty array of bookIds.'
+      message: "Request body must include a non-empty array of bookIds.",
     });
   }
 
@@ -589,45 +775,54 @@ export const deleteMultipleBooks = async (req, res) => {
   let errors = [];
 
   for (const bookId of bookIds) {
-
     if (!mongoose.Types.ObjectId.isValid(bookId)) {
-      errors.push({ bookId, error: 'Invalid book ID format.' });
+      errors.push({ bookId, error: "Invalid book ID format." });
       continue;
     }
+
     try {
-      const book = await Book.findById(bookId);
+      // 🔐 Check book belongs to this agent before deleting
+      const book = await Book.findOne({ _id: bookId, agentId });
+
       if (!book) {
-        errors.push({ bookId, error: 'Book not found.' });
+        errors.push({ bookId, error: "Book not found or access denied." });
         continue;
       }
-      // Delete all pricing data for this book
-      const pricingDeleteResult = await BookPricing.deleteMany({ book: bookId });
-      // Delete the book
+
+      // Delete pricing only for this agent's book
+      const pricingDeleteResult = await BookPricing.deleteMany({
+        book: bookId,
+        agentId,
+      });
+
       const deletedBook = await Book.findByIdAndDelete(bookId);
+
       deletedBooksCount++;
       deletedPricingCount += pricingDeleteResult.deletedCount;
+
       results.push({
         bookId,
         deletedBook: {
           _id: deletedBook._id,
           title: deletedBook.title,
           author: deletedBook.author,
-          isbn: deletedBook.isbn
+          isbn: deletedBook.isbn,
         },
-        deletedPricingCount: pricingDeleteResult.deletedCount
+        deletedPricingCount: pricingDeleteResult.deletedCount,
       });
     } catch (error) {
       errors.push({ bookId, error: error.message });
     }
   }
 
-  res.status(200).json({
+  return res.status(200).json({
     success: true,
-    message: `Bulk delete completed. Deleted ${deletedBooksCount} books and ${deletedPricingCount} pricing records.`,
+    message: `Bulk delete completed. Deleted ${deletedBooksCount} access-allowed book(s) and ${deletedPricingCount} pricing record(s).`,
     results,
-    errors
+    errors,
   });
 };
+
 
 // --- VALIDATE EXCEL MAPPING ---
 export const validateExcelFile = async (req, res) => {
@@ -635,18 +830,23 @@ export const validateExcelFile = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'No Excel file uploaded'
+        message: "No Excel file uploaded"
       });
     }
 
+    const agentId = req.user?.agentId; // 🔐 Add Agent Scope Check
     const filePath = req.file.path;
-    const originalName = path.basename(req.file.originalname, path.extname(req.file.originalname));
+    const originalName = path.basename(
+      req.file.originalname,
+      path.extname(req.file.originalname)
+    );
     const { templateId } = req.body;
 
-    logger.info('Validating Excel file mapping', {
+    logger.info("Validating Excel file mapping", {
       fileName: req.file.originalname,
       filePath,
-      templateId
+      templateId,
+      agentId
     });
 
     const validationResult = await validateExcelMapping(filePath);
@@ -664,63 +864,79 @@ export const validateExcelFile = async (req, res) => {
     let isTemplateMatch = false;
     let templateMatchDetails = null;
 
-    // Handle template matching if templateId is provided
+    // 🔐 Protect Template Access by Agent
     if (templateId) {
       try {
-        const ImportTemplate = (await import('../models/import.template.js')).default;
-        template = await ImportTemplate.findById(templateId);
+        const ImportTemplate =
+          (await import("../models/import.template.js")).default;
 
-        if (template) {
-          // Binary template matching
-          const normalizedTemplate = template.expectedHeaders.map(h => h.toLowerCase().trim());
-          const normalizedFile = validationResult.headers.map(h => h.toLowerCase().trim());
+        template = await ImportTemplate.findOne({
+          _id: templateId,
+          agentId: agentId // Ensure template belongs to the same tenant
+        });
 
-          const allHeadersMatch = normalizedTemplate.every(templateHeader =>
-            normalizedFile.includes(templateHeader)
-          );
+        if (!template) {
+          return res.status(403).json({
+            success: false,
+            message: "Access denied. Template not found for your account."
+          });
+        }
 
-          const missingHeaders = normalizedTemplate.filter(header =>
-            !normalizedFile.includes(header)
-          );
+        // Binary template matching
+        const normalizedTemplate = template.expectedHeaders.map((h) =>
+          h.toLowerCase().trim()
+        );
+        const normalizedFile = validationResult.headers.map((h) =>
+          h.toLowerCase().trim()
+        );
 
-          const extraHeaders = normalizedFile.filter(header =>
-            !normalizedTemplate.includes(header)
-          );
+        const allHeadersMatch = normalizedTemplate.every((templateHeader) =>
+          normalizedFile.includes(templateHeader)
+        );
 
-          templateMatchDetails = {
-            isPerfectMatch: allHeadersMatch,
-            missingHeaders,
-            extraHeaders
-          };
+        const missingHeaders = normalizedTemplate.filter(
+          (header) => !normalizedFile.includes(header)
+        );
 
-          if (allHeadersMatch) {
-            // Perfect match - apply template mapping
-            autoMapping = template.mapping;
-            isTemplateMatch = true;
+        const extraHeaders = normalizedFile.filter(
+          (header) => !normalizedTemplate.includes(header)
+        );
 
-            // Update template usage count
-            await ImportTemplate.findByIdAndUpdate(templateId, {
+        templateMatchDetails = {
+          isPerfectMatch: allHeadersMatch,
+          missingHeaders,
+          extraHeaders
+        };
+
+        if (allHeadersMatch) {
+          autoMapping = template.mapping;
+          isTemplateMatch = true;
+
+          // Update usage safely with tenant scope
+          await ImportTemplate.findOneAndUpdate(
+            { _id: templateId, agentId },
+            {
               $inc: { usageCount: 1 },
               lastUsedAt: new Date()
-            });
-          }
+            }
+          );
         }
       } catch (templateError) {
-        logger.warn('Error processing template:', templateError);
+        logger.warn("Error processing template:", templateError);
       }
     }
 
-    // Clean up uploaded file after validation
+    // Clean uploaded file
     try {
-      const fs = await import('fs');
+      const fs = await import("fs");
       fs.unlinkSync(filePath);
     } catch (cleanupError) {
-      logger.warn('Could not clean up validation file:', cleanupError);
+      logger.warn("Could not clean up validation file:", cleanupError);
     }
 
-    res.status(200).json({
+    return res.status(200).json({
       success: true,
-      message: 'Excel file validation completed',
+      message: "Excel file validation completed",
       data: {
         fileName: req.file.originalname,
         headers: validationResult.headers,
@@ -732,16 +948,16 @@ export const validateExcelFile = async (req, res) => {
         validation: validationResult.validation
       }
     });
-
   } catch (error) {
-    logger.error('Error validating Excel file:', error);
+    logger.error("Error validating Excel file:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error during Excel validation',
+      message: "Server error during Excel validation",
       error: error.message
     });
   }
 };
+
 
 // --- BULK IMPORT EXCEL ---
 export const bulkImportExcelFile = async (req, res) => {
@@ -749,89 +965,102 @@ export const bulkImportExcelFile = async (req, res) => {
     if (!req.file) {
       return res.status(400).json({
         success: false,
-        message: 'No Excel file uploaded'
+        message: "No Excel file uploaded",
       });
     }
+
+    const agentId = req.user?.agentId; // 🔐 Multi-tenant Scope
 
     const { mapping, options } = req.body;
 
     // Parse mapping if it's a string
     let parsedMapping = mapping;
-    if (typeof mapping === 'string') {
+    if (typeof mapping === "string") {
       try {
         parsedMapping = JSON.parse(mapping);
       } catch (parseError) {
-        logger.warn('Could not parse mapping JSON:', parseError);
+        logger.warn("Could not parse mapping JSON:", parseError);
         return res.status(400).json({
           success: false,
-          message: 'Invalid mapping format'
+          message: "Invalid mapping format",
         });
       }
     }
 
-    if (!parsedMapping || typeof parsedMapping !== 'object') {
+    if (!parsedMapping || typeof parsedMapping !== "object") {
       return res.status(400).json({
         success: false,
-        message: 'Column mapping is required'
+        message: "Column mapping is required",
       });
     }
 
     const filePath = req.file.path;
-    const originalName = path.basename(req.file.originalname, path.extname(req.file.originalname));
+    const originalName = path.basename(
+      req.file.originalname,
+      path.extname(req.file.originalname)
+    );
 
-    logger.info('Starting bulk Excel import', {
+    logger.info("Starting bulk Excel import", {
       fileName: req.file.originalname,
       filePath,
       mapping: parsedMapping,
-      options
+      options,
+      agentId, // 🟦 Log for tenant debug
     });
 
-    // Parse options if provided as string
+    // Parse options if string
     let importOptions = {};
     if (options) {
       try {
-        importOptions = typeof options === 'string' ? JSON.parse(options) : options;
+        importOptions =
+          typeof options === "string" ? JSON.parse(options) : options;
       } catch (parseError) {
-        logger.warn('Could not parse import options, using defaults:', parseError);
+        logger.warn("Could not parse import options, using defaults:", parseError);
       }
     }
 
-    const importResult = await bulkImportExcel(filePath, parsedMapping, originalName, importOptions);
+    // 🔐 Pass agentId to ensure documents created are tagged correctly
+    const importResult = await bulkImportExcel(
+      filePath,
+      parsedMapping,
+      originalName,
+      agentId,
+      { ...importOptions } // ⬅️ Tenant-safe import
+    );
 
     if (!importResult.success) {
       return res.status(500).json({
         success: false,
         message: importResult.message,
-        error: importResult.error
+        error: importResult.error,
       });
     }
 
-    // Clean up uploaded file after import
+    // Clean uploaded file
     try {
-      const fs = await import('fs');
+      const fs = await import("fs");
       fs.unlinkSync(filePath);
     } catch (cleanupError) {
-      logger.warn('Could not clean up import file:', cleanupError);
+      logger.warn("Could not clean up import file:", cleanupError);
     }
 
     res.status(200).json({
       success: true,
-      message: 'Bulk import completed successfully',
+      message: "Bulk import completed successfully",
       data: {
         fileName: req.file.originalname,
         stats: importResult.stats,
         summary: importResult.summary,
         logFile: importResult.logFile,
-        logFileUrl: importResult.logFileUrl
-      }
+        logFileUrl: importResult.logFileUrl,
+      },
     });
-
   } catch (error) {
-    logger.error('Error during bulk Excel import:', error);
+    logger.error("Error during bulk Excel import:", error);
     res.status(500).json({
       success: false,
-      message: 'Server error during bulk import',
-      error: error.message
+      message: "Server error during bulk import",
+      error: error.message,
     });
   }
 };

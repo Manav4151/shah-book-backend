@@ -1,3 +1,4 @@
+import { logger } from "../lib/logger.js";
 import CompanyProfile from "../models/company.profile.schema.js";
 
 
@@ -7,35 +8,40 @@ import CompanyProfile from "../models/company.profile.schema.js";
  */
 export const createCompanyProfile = async (req, res) => {
     try {
-        // Get all data from the request body
-        const { 
-            profileName, 
-            companyName, 
-            address, 
-            phone, 
-            email, 
-            logoUrl 
-        } = req.body;
+        const { profileName, companyName, address, phone, email, logoUrl } = req.body;
+        const agentId = req.user?.agentId; // Extract agent from logged-in user
 
-        // Basic validation
-        if (!profileName || !companyName) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Profile Name and Company Name are required.' 
+        if (!agentId) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized: Agent ID missing"
             });
         }
 
-        // Check if a profile with this name already exists
-        const existingProfile = await CompanyProfile.findOne({ profileName });
+        // Basic Validation
+        if (!profileName || !companyName) {
+            return res.status(400).json({
+                success: false,
+                message: "Profile Name and Company Name are required."
+            });
+        }
+
+        // Duplicate check under same agent only
+        const existingProfile = await CompanyProfile.findOne({
+            profileName: profileName.trim(),
+            agentId
+        });
+
         if (existingProfile) {
-            return res.status(409).json({ 
-                success: false, 
-                message: 'A profile with this name already exists.' 
+            return res.status(409).json({
+                success: false,
+                message: "A profile with this name already exists for your account."
             });
         }
 
         const newProfile = new CompanyProfile({
-            profileName,
+            agentId,
+            profileName: profileName.trim(),
             companyName,
             address,
             phone,
@@ -45,17 +51,21 @@ export const createCompanyProfile = async (req, res) => {
 
         const savedProfile = await newProfile.save();
 
-        res.status(201).json({ 
-            success: true, 
-            message: 'Company profile created successfully.', 
-            data: savedProfile 
+        return res.status(201).json({
+            success: true,
+            message: "Company Profile created successfully",
+            data: savedProfile
         });
 
     } catch (error) {
-        logger.error('Error creating company profile:', error); // Assuming you have a logger
-        res.status(500).json({ success: false, message: 'Server error.' });
+        logger.error("Error creating company profile:", error);
+        return res.status(500).json({
+            success: false,
+            message: "Server error while creating company profile."
+        });
     }
 };
+
 
 /**
  * @desc    Get all company profiles (for dropdown lists)
@@ -63,9 +73,18 @@ export const createCompanyProfile = async (req, res) => {
  */
 export const getAllCompanyProfiles = async (req, res) => {
     try {
-        // We only select the 'id' and 'profileName'
-        // This is efficient and all the frontend needs for a dropdown.
-        const profiles = await CompanyProfile.find().select('_id profileName companyName');
+        const agentId = req.user?.agentId;
+
+        if (!agentId) {
+            return res.status(401).json({
+                success: false,
+                message: "Unauthorized: Agent ID missing"
+            });
+        }
+
+        const profiles = await CompanyProfile.find({ agentId })
+            .select("_id profileName companyName")
+            .sort({ createdAt: -1 }); // Optional: latest first
 
         res.status(200).json({
             success: true,
@@ -73,7 +92,7 @@ export const getAllCompanyProfiles = async (req, res) => {
         });
 
     } catch (error) {
-        logger.error('Error fetching company profiles:', error);
-        res.status(500).json({ success: false, message: 'Server error.' });
+        logger.error("Error fetching company profiles:", error);
+        res.status(500).json({ success: false, message: "Server error" });
     }
 };

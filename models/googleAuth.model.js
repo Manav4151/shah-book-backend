@@ -5,11 +5,10 @@ import { Schema, model } from "mongoose";
  * One record per user.
  */
 const GmailAuthSchema = new Schema({
-    userId: {
+    agentId: {
         type: Schema.Types.ObjectId,
-        ref: "User",
+        ref: "Agent",
         required: true,
-        unique: true
     },
     email: {
         type: String, // Gmail account that was authenticated
@@ -27,5 +26,5 @@ const GmailAuthSchema = new Schema({
     tokenType: String,
     expiryDate: Number,
 }, { timestamps: true });
-
+GmailAuthSchema.index({ agentId: 1 }, { unique: true });
 export default model("GmailAuth", GmailAuthSchema);

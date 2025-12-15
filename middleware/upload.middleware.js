@@ -51,8 +51,13 @@ const uploadSingle = upload.single('excelFile');
 // Wrapper middleware to handle multer errors
 const handleUpload = (req, res, next) => {
     uploadSingle(req, res, (err) => {
+        console.log("file reach hear1");
         if (err instanceof multer.MulterError) {
+        console.log("file reach hear3");
+
             if (err.code === 'LIMIT_FILE_SIZE') {
+        console.log("file reach hear2");
+
                 return res.status(400).json({
                     message: 'File too large',
                     error: 'File size must be less than 10MB'

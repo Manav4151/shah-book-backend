@@ -184,7 +184,6 @@ function processBookRow(row, mapping, sourceName, helpers = {}) {
             data.bookData[schemaField] = cleanValue;
         }
     }
-    logger.error('data', data);
     // Final Cleanup & Type Conversion
 
     // ISBN validation and cleaning
@@ -255,9 +254,10 @@ async function writeConflictLog(conflictDetails, sourceName) {
  * @param {string} sourceName - A name for this import batch, e.g., the original filename.
  * @returns {Promise<object>} An object with detailed statistics and a path to the conflict log.
  */
-export async function bulkImportExcel(filePath, mapping, sourceName) {
+export async function bulkImportExcel(filePath, mapping, sourceName, agentId) {
     try {
-        logger.info(`Starting bulk import for source: ${sourceName}`);
+        logger.info(`Starting bulk import for source: ${sourceName}`, { agentId });
+
         const workbook = xlsx.readFile(filePath);
         const sheet = workbook.Sheets[workbook.SheetNames[0]];
         const sheetData = xlsx.utils.sheet_to_json(sheet);
@@ -282,96 +282,121 @@ export async function bulkImportExcel(filePath, mapping, sourceName) {
                     validateISBN,
                     cleanIsbnForValidation
                 });
+
                 if (!bookData.title || !pricingData.rate) {
                     throw new Error("Missing required data (Title or Price).");
                 }
-                logger.error('bookData', bookData);
-                logger.error('pricingData', pricingData);
-                logger.error('publisherData', publisherData);
 
-                // 1. Call the new helper instead of the old findBookMatch
-                const statusResult = await determineBookStatus(bookData, pricingData, publisherData);
-                // logger.info('publisherId', publisherId);
-                // --- LOGIC UPDATED BELOW ---
+                // Set tenant context
+                bookData.agentId = agentId;
+                pricingData.agentId = agentId;
 
-                // 2. Use the result from the helper in your switch statement
+                // 🔐 MULTI TENANT - Pass agentId to determineBookStatus
+                const statusResult = await determineBookStatus(bookData, pricingData, publisherData, agentId);
+
                 switch (statusResult.bookStatus) {
-                    case 'NEW':
-                        // This case creates a new book and its pricing
-                        const publisherId = await getOrCreatePublisher(publisherData.publisher_name);
+                    case "NEW": {
+                        const publisherId = await getOrCreatePublisher(publisherData.publisher_name, agentId);
+
                         let savedBook = null;
                         try {
-                            const newBook = new Book({ ...bookData, publisher: publisherId });
+                            const newBook = new Book({
+                                ...bookData,
+                                publisher: publisherId,
+                                agentId // 🔐 ensure saved tenant
+                            });
+
                             savedBook = await newBook.save();
-                            const newPricing = new BookPricing({ ...pricingData, book: savedBook._id });
+
+                            const newPricing = new BookPricing({
+                                ...pricingData,
+                                book: savedBook._id,
+                                agentId // 🔐 ensure saved tenant
+                            });
                             await newPricing.save();
+
                             stats.booksAdded++;
                             stats.pricesAdded++;
                         } catch (dbError) {
                             if (savedBook?._id) {
                                 await Book.findByIdAndDelete(savedBook._id);
                             }
-                            throw new Error(`Database save failed: ${dbError.message}. Book creation rolled back.`);
+                            throw new Error(`DB failed: ${dbError.message}`);
                         }
                         break;
+                    }
 
-                    case 'DUPLICATE':
-                        // This case handles all pricing actions for duplicates
+                    case "DUPLICATE": {
                         const { existingBook, pricingId } = statusResult.details;
 
-                        if (statusResult.pricingStatus === 'ADD_PRICE') {
-                            const newPricing = new BookPricing({ ...pricingData, book: existingBook._id });
+                        if (statusResult.pricingStatus === "ADD_PRICE") {
+                            const newPricing = new BookPricing({
+                                ...pricingData,
+                                book: existingBook._id,
+                                agentId
+                            });
                             await newPricing.save();
                             stats.pricesAdded++;
-                        } else if (statusResult.pricingStatus === 'UPDATE_PRICE') {
-                            logger.info('pricingId', pricingId);
-                            logger.info('pricingData', pricingData);
-                            await BookPricing.findByIdAndUpdate(pricingId, { rate: pricingData.rate, discount: pricingData.discount });
+
+                        } else if (statusResult.pricingStatus === "UPDATE_PRICE") {
+                            await BookPricing.findOneAndUpdate(
+                                { _id: pricingId, agentId },
+                                { rate: pricingData.rate, discount: pricingData.discount }
+                            );
                             stats.pricesUpdated++;
-                        } else { // 'NO_CHANGE'
+                        } else {
                             stats.skippedAsDuplicate++;
                         }
                         break;
+                    }
 
-                    case 'CONFLICT':
-                        // This case logs the conflict and skips the row
+                    case "CONFLICT":
                         stats.skippedAsConflict++;
                         stats.conflictDetails.push({
                             row: rowNum,
                             data: row,
                             conflict: statusResult.details.conflictFields,
-                            message: statusResult.message
+                            message: statusResult.message,
+                            agentId
                         });
                         break;
                 }
-                // --- END OF CHANGES ---
+
                 stats.processed++;
 
             } catch (error) {
                 stats.errors++;
                 stats.errorDetails.push({ row: rowNum, error: error.message, data: row });
-                logger.error(`Error processing row ${rowNum}:`, error);
+                logger.error(`Error processing row ${rowNum}`, { error });
             }
         }
 
+        // Save conflict log if required
         let conflictLogFile = null;
         if (stats.skippedAsConflict > 0) {
-            conflictLogFile = await writeConflictLog(stats.conflictDetails, sourceName);
+            conflictLogFile = await writeConflictLog(stats.conflictDetails, sourceName, agentId);
         }
 
-        logger.info('Bulk import process completed.', { sourceName, stats });
+        logger.info("Bulk import completed successfully", { sourceName, stats, agentId });
+
         return {
             success: true,
             message: "Import completed successfully.",
             stats,
             logFile: conflictLogFile ? path.basename(conflictLogFile) : null,
-            logFileUrl: conflictLogFile ? `http://localhost:5050/api/logs/${encodeURIComponent(path.basename(conflictLogFile))}/download` : null,
-            conflictLogFile,
+            logFileUrl: conflictLogFile
+                ? `http://localhost:5050/api/logs/${encodeURIComponent(path.basename(conflictLogFile))}/download`
+                : null,
+            conflictLogFile
         };
 
     } catch (error) {
-        logger.error('Fatal error during bulk import:', { sourceName, error });
-        return { success: false, message: "A fatal error occurred during the import.", error: error.message };
+        logger.error("Fatal import error", { sourceName, agentId, error });
+        return {
+            success: false,
+            message: "Fatal error during import.",
+            error: error.message
+        };
     }
 }
 

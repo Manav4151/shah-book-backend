@@ -4,22 +4,31 @@ import gmailAuthModel from "../models/googleAuth.model.js";
 import { ObjectId } from "mongodb";
 import { Buffer } from "buffer";
 import { log } from "console";
+import { User } from "../models/user.schema.js";
+import { ApiResponse } from "../lib/api-response.js";
 
 
 
 /**
  * Step 1: Generate Google OAuth URL for user to authenticate
  */
-export function getAuthUrl(req, res) {
-    const userId = req.user?.id || 'anonymous';
+export async function getAuthUrl(req, res) {
+    const userId = req.user?.id;
+
+    const user = await User.findById(userId).populate("agentId");
+
+    if (!user || !user.agentId) {
+        return res.status(404).json(ApiResponse.error("No agent found for this user"));
+    }
+    const agentId = user.agentId;
     // const { userId } = req.query;
-    if (!userId) return res.status(400).json({ message: "userId is required" });
+    // if (!userId) return res.status(400).json({ message: "userId is required" });
 
 
 
 
     const url = generateAuthUrl(
-        userId // pass user id to callback for saving tokens
+        agentId // pass user id to callback for saving tokens
     );
     console.log("url", url);
 
@@ -31,9 +40,9 @@ export function getAuthUrl(req, res) {
  */
 export async function oauthCallback(req, res) {
     const code = req.query.code;
-    const userId = req.query.state;
+    const agentId = req.query.state;
     console.log("Code", code);
-    console.log("User ID", userId);
+    console.log("User ID", agentId);
 
     try {
         // 1️⃣ Create a FRESH client instance for THIS specific request
@@ -48,9 +57,9 @@ export async function oauthCallback(req, res) {
         console.log("User Info:", userInfo.data);
         // Save tokens in DB
         const authData = await gmailAuthModel.findOneAndUpdate(
-            { userId },
+            { agentId },
             {
-                userId,
+                agentId,
                 email: userInfo.data.email,
                 accessToken: tokens.access_token,
                 refreshToken: tokens.refresh_token,
@@ -61,7 +70,7 @@ export async function oauthCallback(req, res) {
             { upsert: true, new: true }
         );
         // Redirect to frontend
-        res.redirect(`http://localhost:3000/emails`);
+        res.redirect(`http://localhost:3000`);
     } catch (error) {
         console.error("OAuth Callback Error:", error);
         res.status(500).json({ message: "Authentication failed", error });
@@ -72,7 +81,8 @@ export async function oauthCallback(req, res) {
  * Step 3: Fetch list of emails
  */
 export async function listEmails(req, res) {
-    const userId = req.user?.id || 'anonymous';
+    const agentId = req.user?.agentId;
+    console.log("user",agentId);
     const { search, from, status, newer_than } = req.query;
 
     // Build the search query
@@ -83,8 +93,7 @@ export async function listEmails(req, res) {
     if (newer_than) queryParts.push(`newer_than:${newer_than}`); // e.g., newer_than=7d
     const searchQuery = queryParts.join(' '); // Combine all parts with a space
     try {
-        const newUserId = new ObjectId(req.user.id);
-        const authData = await gmailAuthModel.findOne({ userId: newUserId });
+        const authData = await gmailAuthModel.findOne({ agentId: agentId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
 
         // 1️⃣ Create a FRESH client instance for THIS specific request
@@ -140,12 +149,12 @@ export async function listEmails(req, res) {
  */
 export async function getEmailContent(req, res) {
     const { messageId } = req.query;
-    const userId = req.user?.id || 'anonymous';
-    console.log("userId", userId);
+     const agentId = req.user?.agentId;
+
     console.log("messageId", messageId);
 
     try {
-        const authData = await gmailAuthModel.findOne({ userId });
+        const authData = await gmailAuthModel.findOne({ agentId: agentId });
         if (!authData) return res.status(401).json({ message: "Gmail not connected" });
 
         // 1️⃣ Create a FRESH client instance for THIS specific request
@@ -271,10 +280,10 @@ export function formatGmailMessage(message) {
  */
 export async function downloadGoogleEmailAttachment(req, res) {
     const { messageId, filename } = req.params;
-    const userId = req.user?.id || 'anonymous';
+    const agentId = req.user?.agentId;
 
     try {
-        const authData = await gmailAuthModel.findOne({ userId });
+        const authData = await gmailAuthModel.findOne({ agentId: agentId });
         if (!authData) {
             return res.status(401).json({ message: "Gmail not connected" });
         }

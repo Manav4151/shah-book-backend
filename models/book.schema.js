@@ -4,13 +4,11 @@ import { Schema, model } from 'mongoose';
 const bookSchema = new Schema(
     {
         title: { type: String, default: null, trim: true },
-        //    authors: [ 
-        // // This is an array of author for separate authors schema.  
-        //   {
-        //     type: Schema.Types.ObjectId,
-        //     ref: 'Author', // This creates the reference
-        //   },
-        // ],
+        agentId: {
+        type: Schema.Types.ObjectId,
+        ref: "Agent",
+        required: true,
+    },
         author: { type: String, default: null },
         edition: { type: String, default: null },
         year: { type: Number, default: null },
@@ -34,8 +32,8 @@ const bookSchema = new Schema(
     },
     { timestamps: true }
 );
-
-bookSchema.index({ title: 'text', author: 'text' });
+bookSchema.index({ agentId: 1 });
+bookSchema.index({ title: 'text', isbn: 'text' , author: 'text'});
 
 const Book = model('Book', bookSchema);
 export default Book;

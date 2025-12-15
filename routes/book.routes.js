@@ -18,7 +18,7 @@ router.post('/', createOrUpdateBook);
 // router.route('/:id')
 //   .get(getBookById)
 //   .put(updateBook)
-//   .delete(deleteBook);
+
 
 router.get('/', getBooks); // GET /api/books
 router.get('/:bookId/details', getBookDetails);

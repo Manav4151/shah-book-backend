@@ -12,39 +12,44 @@ function escapeRegex(value) {
  * @param {string} publisherName - The name of the publisher.
  * @returns {Promise<string|null>} - The ObjectId of the publisher or null.
  */
-const findPublisherId = async (publisherName) => {
-  if (!publisherName) return null;
+const findPublisherId = async (publisherName, agentId) => {
+  if (!publisherName || !agentId) return null;
+
   const cleanName = publisherName.trim().toUpperCase();
+
   const existingPublisher = await Publisher.findOne({
-    name: cleanName
-  });
+    name: cleanName,
+    agentId // 🔐 Only return publisher belonging to the logged-in tenant
+  }).select("_id");
+
   return existingPublisher ? existingPublisher._id : null;
 };
-
 /**
  * A helper function to check the pricing status for a confirmed duplicate book.
  * @param {object} existingBook - The book document from the database.
  * @param {object} pricingData - The new pricing data from the request.
  * @returns {object} An object with the pricing action and details.
  */
-const checkPricingLogic = async (existingBook, pricingData) => {
+const checkPricingLogic = async (existingBook, pricingData, agentId) => {
   const { source, rate, discount } = pricingData;
 
+  // Ensure we only search pricing belonging to SAME agent
   const existingPricing = await BookPricing.findOne({
     book: existingBook._id,
     source,
+    agentId, // 🔐 Tenant restriction added
   });
 
-  // 1. New pricing source for this book -> Add new price
+  // 1️⃣ New pricing source → Add new price
   if (!existingPricing) {
     return {
-      action: 'ADD_PRICE',
-      message: 'New pricing source for this duplicate book.',
-      details: { bookId: existingBook._id }
+      action: "ADD_PRICE",
+      message: "New pricing source for this duplicate book.",
+      details: { bookId: existingBook._id },
     };
   }
 
-  // 2. Same source, but different price/discount -> Update price
+  // 2️⃣ Same source but different rate or discount → Update price
   const isRateDifferent = existingPricing.rate !== rate;
   const isDiscountDifferent = existingPricing.discount !== discount;
 
@@ -54,30 +59,34 @@ const checkPricingLogic = async (existingBook, pricingData) => {
       differences.rate = { old: existingPricing.rate, new: rate };
     }
     if (isDiscountDifferent) {
-      differences.discount = { old: existingPricing.discount, new: (discount || 0) };
+      differences.discount = {
+        old: existingPricing.discount,
+        new: discount || 0,
+      };
     }
+
     return {
-      action: 'UPDATE_PRICE',
-      message: 'Existing pricing source found with different values.',
+      action: "UPDATE_PRICE",
+      message: "Existing pricing source found with different values.",
       details: {
         bookId: existingBook._id,
         pricingId: existingPricing._id,
-        differences: differences
-      }
-
+        differences,
+      },
     };
   }
 
-  // 3. Same source and same price/discount -> No change
+  // 3️⃣ Identical pricing → No Change
   return {
-    action: 'NO_CHANGE',
-    message: 'Identical pricing already exists for this source.',
+    action: "NO_CHANGE",
+    message: "Identical pricing already exists for this source.",
     details: {
       bookId: existingBook._id,
-      pricingId: existingPricing._id
-    }
+      pricingId: existingPricing._id,
+    },
   };
 };
+
 
 
 /**
@@ -87,126 +96,118 @@ const checkPricingLogic = async (existingBook, pricingData) => {
  */
 export const checkBookStatus = async (req, res) => {
   try {
+    const agentId = req.user?.agentId;
+    if (!agentId) {
+      return res.status(403).json({ message: "Agent not assigned" });
+    }
+
     const { bookData, pricingData, publisherData } = req.body;
 
     if (!bookData?.title || !publisherData?.publisher_name) {
       return res.status(400).json({ message: "Book title and publisher name are required." });
     }
 
-    const publisherId = await findPublisherId(publisherData.publisher_name);
-    if (!publisherId) {
-      // You might want to handle this case differently, e.g., create the publisher
-      // For now, we treat it as a potential new book unless matched by other means.
-    }
+    const publisherId = await findPublisherId(publisherData.publisher_name, agentId);
 
-    // Rule 1 & 2: Check by ISBN first if it exists.
+    // ---- RULE 1 & 2: Check by ISBN ----
     if (bookData.isbn) {
-      const bookByIsbn = await Book.findOne({ isbn: bookData.isbn }).populate('publisher');
+      const bookByIsbn = await Book.findOne({
+        isbn: bookData.isbn,
+        agentId: agentId // 🟢 Tenant Filter Added
+      }).populate("publisher");
+
       if (bookByIsbn) {
-        // ISBN match found. Now, check title.
         if (bookByIsbn.title.toLowerCase() === bookData.title.toLowerCase()) {
-          // Rule 2: Same ISBN and Title -> DUPLICATE.
-          const pricing = await checkPricingLogic(bookByIsbn, pricingData);
+          const pricing = await checkPricingLogic(bookByIsbn, pricingData , agentId);
           return res.status(200).json({
             success: true,
-            bookStatus: 'DUPLICATE',
+            bookStatus: "DUPLICATE",
             pricingStatus: pricing.action,
             message: `Duplicate book found by ISBN. | ${pricing.message}`,
-            details: { ...pricing.details, existingBook: bookByIsbn },
+            details: { ...pricing.details, existingBook: bookByIsbn }
           });
         } else {
-          // Same ISBN, different Title -> CONFLICT.
           return res.status(200).json({
             success: true,
-            bookStatus: 'CONFLICT',
-            message: 'A book with this ISBN already exists but has a different title.',
+            bookStatus: "CONFLICT",
+            message: "A book with this ISBN already exists but has a different title.",
             details: {
               existingBook: bookByIsbn,
               conflictFields: { title: { old: bookByIsbn.title, new: bookData.title } }
-            },
+            }
           });
         }
-      }
-      else {
+      } else {
         return res.status(200).json({
           success: true,
-          bookStatus: 'NEW',
-          pricingStatus: 'ADD_PRICE', // A new book always requires adding a new price
-          message: 'No matching book found. It can be added as a new entry.',
-          details: {},
+          bookStatus: "NEW",
+          pricingStatus: "ADD_PRICE",
+          message: "No matching book found (same ISBN).",
+          details: {}
         });
       }
     }
 
-    // Rule 4: If no ISBN match or no ISBN provided, check by Other Code.
+    // ---- RULE 4: Check by Other Code ----
     if (bookData.other_code) {
-      const bookByCode = await Book.findOne({ other_code: bookData.other_code }).populate('publisher');
+      const bookByCode = await Book.findOne({
+        other_code: bookData.other_code,
+        agentId: agentId // 🟢 Tenant Filter Added
+      }).populate("publisher");
+
       if (bookByCode) {
         if (bookByCode.title.toLowerCase() === bookData.title.toLowerCase()) {
-          // Same Other Code and Title -> DUPLICATE.
-          const pricing = await checkPricingLogic(bookByCode, pricingData);
+          const pricing = await checkPricingLogic(bookByCode, pricingData , agentId);
           return res.status(200).json({
             success: true,
-            bookStatus: 'DUPLICATE',
+            bookStatus: "DUPLICATE",
             pricingStatus: pricing.action,
             message: `Duplicate book found by Other Code. | ${pricing.message}`,
-            details: { ...pricing.details, existingBook: bookByCode },
+            details: { ...pricing.details, existingBook: bookByCode }
           });
         } else {
-          // Same Other Code, different Title -> CONFLICT.
           return res.status(200).json({
             success: true,
-            bookStatus: 'CONFLICT',
-            message: 'A book with this Other Code already exists but has a different title.',
+            bookStatus: "CONFLICT",
+            message: "Other Code exists but linked to different title.",
             details: {
               existingBook: bookByCode,
               conflictFields: { title: { old: bookByCode.title, new: bookData.title } }
-            },
+            }
           });
         }
       }
     }
 
-    // Rule 3 & 5: Last check. Find by Title and Publisher.
+    // ---- RULE 3 & 5: Match by Title & Publisher ----
     if (publisherId) {
       const escapedTitle = escapeRegex(bookData.title);
+
       const bookByTitleAndPublisher = await Book.findOne({
         title: new RegExp(`^${escapedTitle}$`, "i"),
-        publisher: publisherId
-      }).populate('publisher');
+        publisher: publisherId,
+        agentId: agentId // 🟢 Tenant Filter Added
+      }).populate("publisher");
 
       if (bookByTitleAndPublisher) {
-        // A book with the same title and publisher exists.
-        // Rule 3: This is a CONFLICT if the new book has a different ISBN.
-        // if (bookData.isbn && bookByTitleAndPublisher.isbn !== bookData.isbn) {
-        //   return res.status(200).json({
-        //     bookStatus: 'CONFLICT',
-        //     message: 'A book with this Title and Publisher already exists, but with a different ISBN.',
-        //     details: {
-        //       existingBook: bookByTitleAndPublisher,
-        //       conflictFields: { isbn: { old: bookByTitleAndPublisher.isbn, new: bookData.isbn } }
-        //     },
-        //   });
-        // }
-        // Rule 5: It's a DUPLICATE if identifiers are missing or match.
-        const pricing = await checkPricingLogic(bookByTitleAndPublisher, pricingData);
+        const pricing = await checkPricingLogic(bookByTitleAndPublisher, pricingData , agentId);
         return res.status(200).json({
           success: true,
-          bookStatus: 'DUPLICATE',
+          bookStatus: "DUPLICATE",
           pricingStatus: pricing.action,
-          message: `Duplicate book found by Title and Publisher. | ${pricing.message}`,
-          details: { ...pricing.details, existingBook: bookByTitleAndPublisher },
+          message: `Duplicate found by Title + Publisher. | ${pricing.message}`,
+          details: { ...pricing.details, existingBook: bookByTitleAndPublisher }
         });
       }
     }
 
-    // Rule 6 & 7: If none of the above checks found anything, it's a NEW book.
+    // ---- RULE 6 & 7: New Book ----
     return res.status(200).json({
       success: true,
-      bookStatus: 'NEW',
-      pricingStatus: 'ADD_PRICE', // A new book always requires adding a new price
-      message: 'No matching book found. It can be added as a new entry.',
-      details: {},
+      bookStatus: "NEW",
+      pricingStatus: "ADD_PRICE",
+      message: "No matching book found.",
+      details: {}
     });
 
   } catch (error) {
@@ -214,6 +215,7 @@ export const checkBookStatus = async (req, res) => {
     res.status(500).json({ message: "Internal server error", error: error.message });
   }
 };
+
 
 
 /**
@@ -224,111 +226,137 @@ export const checkBookStatus = async (req, res) => {
  * @param {object} publisherData - The publisher data from the Excel row.
  * @returns {Promise<object>} - A status object.
  */
-export const determineBookStatus = async (bookData, pricingData, publisherData) => {
-  const publisherId = await findPublisherId(publisherData.publisher_name);
+export const determineBookStatus = async (bookData, pricingData, publisherData, agentId) => {
+  const publisherId = await findPublisherId(publisherData.publisher_name, agentId);
 
-  // Rule 1 & 2: Check by ISBN first
+  // Rule 1 & 2: Check by ISBN within same tenant
   if (bookData.isbn) {
-    const bookByIsbn = await Book.findOne({ isbn: bookData.isbn }).populate('publisher');
+    const bookByIsbn = await Book.findOne({
+      isbn: bookData.isbn,
+      agentId // 🔐 Tenant restriction added
+    }).populate("publisher");
+
     if (bookByIsbn) {
       if (bookByIsbn.title.toLowerCase() === bookData.title.toLowerCase()) {
-        const pricing = await checkPricingLogic(bookByIsbn, pricingData);
+        const pricing = await checkPricingLogic(bookByIsbn, pricingData, agentId);
         return {
           success: true,
-          bookStatus: 'DUPLICATE',
+          bookStatus: "DUPLICATE",
           pricingStatus: pricing.action,
           message: `Duplicate book found by ISBN. | ${pricing.message}`,
-          details: { ...pricing.details, existingBook: bookByIsbn },
+          details: { ...pricing.details, existingBook: bookByIsbn }
         };
       } else {
         return {
           success: true,
-          bookStatus: 'CONFLICT',
-          message: 'A book with this ISBN already exists but has a different title.',
+          bookStatus: "CONFLICT",
+          message: "A book with this ISBN already exists but has a different title.",
           details: {
             existingBook: bookByIsbn,
-            conflictFields: { title: { old: bookByIsbn.title, new: bookData.title } }
-          },
+            conflictFields: {
+              title: { old: bookByIsbn.title, new: bookData.title }
+            }
+          }
         };
       }
     }
-    else {
-      return {
-        success: true,
-        bookStatus: 'NEW',
-        pricingStatus: 'ADD_PRICE', // A new book always requires adding a new price
-        message: 'No matching book found. It can be added as a new entry.',
-        details: {},
-      };
-    }
+
+    return {
+      success: true,
+      bookStatus: "NEW",
+      pricingStatus: "ADD_PRICE",
+      message: "No matching book found. It can be added as a new entry.",
+      details: {}
+    };
   }
 
   // Rule 4: Check by Other Code
-  else if (bookData.other_code) {
-    const bookByCode = await Book.findOne({ other_code: bookData.other_code }).populate('publisher');
+  if (bookData.other_code) {
+    const bookByCode = await Book.findOne({
+      other_code: bookData.other_code,
+      agentId // 🔐 Tenant restriction added
+    }).populate("publisher");
+
     if (bookByCode) {
       if (bookByCode.title.toLowerCase() === bookData.title.toLowerCase()) {
-        const pricing = await checkPricingLogic(bookByCode, pricingData);
+        const pricing = await checkPricingLogic(bookByCode, pricingData, agentId);
         return {
           success: true,
-          bookStatus: 'DUPLICATE',
+          bookStatus: "DUPLICATE",
           pricingStatus: pricing.action,
           message: `Duplicate book found by Other Code. | ${pricing.message}`,
-          details: { ...pricing.details, existingBook: bookByCode },
+          details: { ...pricing.details, existingBook: bookByCode }
         };
       } else {
         return {
           success: true,
-          bookStatus: 'CONFLICT',
-          message: 'A book with this Other Code already exists but has a different title.',
+          bookStatus: "CONFLICT",
+          message:
+            "A book with this Other Code already exists but has a different title.",
           details: {
             existingBook: bookByCode,
-            conflictFields: { title: { old: bookByCode.title, new: bookData.title } }
-          },
+            conflictFields: {
+              title: { old: bookByCode.title, new: bookData.title }
+            }
+          }
         };
       }
     }
   }
 
-  // Rule 3 & 5: Check by Title and Publisher
+  // Rule 3 & 5: Title + Publisher match
   if (publisherId) {
     const escapedTitle = escapeRegex(bookData.title);
     const bookByTitleAndPublisher = await Book.findOne({
       title: new RegExp(`^${escapedTitle}$`, "i"),
-      publisher: publisherId
-    }).populate('publisher');
+      publisher: publisherId,
+      agentId // 🔐 Tenant restriction added
+    }).populate("publisher");
 
     if (bookByTitleAndPublisher) {
-
-      // *** Refinement: Also check for other_code conflict ***
-      if (bookData.other_code && bookByTitleAndPublisher.other_code !== bookData.other_code) {
+      if (
+        bookData.other_code &&
+        bookByTitleAndPublisher.other_code !== bookData.other_code
+      ) {
         return {
           success: true,
-          bookStatus: 'CONFLICT',
-          message: 'A book with this Title and Publisher already exists, but with a different Other Code.',
+          bookStatus: "CONFLICT",
+          message:
+            "A book with this Title and Publisher already exists, but with a different Other Code.",
           details: {
             existingBook: bookByTitleAndPublisher,
-            conflictFields: { other_code: { old: bookByTitleAndPublisher.other_code, new: bookData.other_code } }
-          },
+            conflictFields: {
+              other_code: {
+                old: bookByTitleAndPublisher.other_code,
+                new: bookData.other_code
+              }
+            }
+          }
         };
       }
-      const pricing = await checkPricingLogic(bookByTitleAndPublisher, pricingData);
+
+      const pricing = await checkPricingLogic(
+        bookByTitleAndPublisher,
+        pricingData,
+        agentId
+      );
+
       return {
         success: true,
-        bookStatus: 'DUPLICATE',
+        bookStatus: "DUPLICATE",
         pricingStatus: pricing.action,
         message: `Duplicate book found by Title and Publisher. | ${pricing.message}`,
-        details: { ...pricing.details, existingBook: bookByTitleAndPublisher },
+        details: { ...pricing.details, existingBook: bookByTitleAndPublisher }
       };
     }
   }
 
-  // Rule 6 & 7: Fallback to NEW
+  // Rule 6 & 7: NEW
   return {
     success: true,
-    bookStatus: 'NEW',
-    pricingStatus: 'ADD_PRICE',
-    message: 'No matching book found.',
-    details: {},
+    bookStatus: "NEW",
+    pricingStatus: "ADD_PRICE",
+    message: "No matching book found.",
+    details: {}
   };
 };

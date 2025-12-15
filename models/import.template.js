@@ -1,6 +1,7 @@
 import { Schema, model } from 'mongoose';
 
 const importTemplateSchema = new Schema({
+  agentId: { type: Schema.Types.ObjectId, ref: "Agent", required: true },
   name: {
     type: String,
     required: true,
@@ -34,5 +35,5 @@ const importTemplateSchema = new Schema({
 }, {
   timestamps: true
 });
-
+importTemplateSchema.index({ agentId: 1 });
 export default model('ImportTemplate', importTemplateSchema);

@@ -1,67 +1,85 @@
 import { auth, ROLES } from "../lib/auth.js";
 import { AppError } from "../lib/api-error.js";
 
-export const authenticate = async (req, res, next) => {
+// export const authenticate = async (req, res, next) => {
+//   try {
+//     const response = await auth.api.getSession({
+//       query: { disableCookieCache: true },
+//       headers: req.headers,
+//     });
+
+//     if (!response.session) {
+//       return next(AppError.unauthorized("Unauthorized"));
+//     }
+
+//     req.user = response.user;
+//     next();
+//   } catch (error) {
+//     next(
+//       AppError.internal("Authentication failed", {
+//         originalError: error.message,
+//       })
+//     );
+//   }
+// };
+
+ // Import your auth setup
+
+
+ export const authenticate = async (req, res, next) => {
   try {
-    const response = await auth.api.getSession({
+        console.log("🟡 Incoming headers:", req.headers.authorization || req.headers.cookie);
+    const { session, user } = await auth.api.getSession({
       query: { disableCookieCache: true },
       headers: req.headers,
     });
-
-    if (!response.session) {
+     console.log("🔵 Better Auth Response: ", { session, user });
+    if (!session) {
       return next(AppError.unauthorized("Unauthorized"));
     }
 
-    req.user = response.user;
+    // Use session.user (contains custom fields)
+    req.user = user;
+
     next();
   } catch (error) {
     next(
       AppError.internal("Authentication failed", {
-        originalError: error.message,
+        originalError: error?.message,
       })
     );
   }
 };
 
- // Import your auth setup
-
 export const authorizeRoles = (...allowedRoles) => {
-  // 1. Use the Constant, don't hardcode strings
-  const ALL_ROLES = Object.values(ROLES); 
+  return (req, res, next) => {
+    const user = req.user;
 
-  // If no roles passed, allow any authenticated user with a valid role
-  const finalRoles = allowedRoles.length > 0 ? allowedRoles : ALL_ROLES;
-
-  return async (req, res, next) => {
-    try {
-      const response = await auth.api.getSession({
-        query: { 
-            disableCookieCache: true // Good! Keeps permissions fresh
-        },
-        headers: req.headers,
-      });
-
-      if (!response || !response.session) {
-        return next(AppError.unauthorized("Unauthorized - Please log in"));
-      }
-
-      // Attach user to request so you can use req.user.id in your controllers later
-      req.user = response.user;
-
-      // 2. Check if the user's role is in the allowed list
-      if (!finalRoles.includes(req.user.role)) {
-        return next(
-          AppError.forbidden(
-            `Access denied. You are a ${req.user.role}, but this requires: ${finalRoles.join(", ")}`
-          )
-        );
-      }
-
-      next();
-    } catch (error) {
-      // Log the actual error for debugging, pass a safe error to user
-      console.error("Auth Middleware Error:", error);
-      next(AppError.internal("Authentication check failed"));
+    if (!user) {
+      return next(AppError.unauthorized("Not authenticated"));
     }
+
+    const role = user.role;
+
+    // If no specific roles passed → allow all authenticated users
+    const rolesToCheck = allowedRoles.length > 0 ? allowedRoles : Object.values(ROLES);
+
+    // 1️⃣ Role Check
+    if (!rolesToCheck.includes(role)) {
+      return next(
+        AppError.forbidden(
+          `Access denied: ${role} is not permitted. Allowed: ${rolesToCheck.join(", ")}`
+        )
+      );
+    }
+
+    // 2️⃣ Multi-Tenant Protection
+    if (role !== ROLES.SYSTEM_ADMIN && !user.agentId) {
+      return next(
+        AppError.forbidden("User does not belong to any agent (tenant). No access allowed.")
+      );
+    }
+
+    next();
   };
 };
